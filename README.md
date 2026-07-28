@@ -8,7 +8,7 @@ It is deliberately **public** so that public org repos (e.g. [`assay-harness`](h
 
 ### `shared-secrets-scan.yml` — gitleaks secrets scan
 
-Arch-aware, version-pinned `gitleaks detect`. The single source of truth for the org secrets-scan gate; runs with `permissions: contents: read` only (no secrets, fork-PR safe).
+Platform- and arch-aware, version-pinned `gitleaks detect` (Linux or macOS on arm64 or x64). The single source of truth for the org secrets-scan gate; runs with `permissions: contents: read` only (no secrets, fork-PR safe).
 
 Consume it with a **40-char commit SHA pin** (never a branch or mutable tag):
 
