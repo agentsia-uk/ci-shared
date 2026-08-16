@@ -23,10 +23,24 @@ jobs:
       contents: read
 ```
 
+### `pr-label-policy.yml` — mutually exclusive strategy attribution
+
+Reads the pull request's live labels and fails closed unless there is exactly
+one change type (`bug`, `enhancement`, `documentation`, or `type:tech-debt`)
+and exactly one canonical strategy pillar (`pillar-1` through `pillar-8`). It
+also rejects retired, case-variant, or otherwise pillar-like labels so one PR
+cannot be attributed to two pillars. The workflow checks out no contributor
+code and needs only `contents: read` plus `pull-requests: read`.
+
+Every consumer must trigger the SHA-pinned workflow for opened, reopened,
+synchronized, converted-to-ready, labeled, and unlabeled PR events. Repository
+rulesets then require the resulting `Validate mutually exclusive PR labels`
+status before merge.
+
 ## Rules
 
 1. **SHA-pin every consumer** (council S2). Bumping a workflow is a deliberate re-pin in each consumer, never a silent mutable-ref drift.
-2. **Single source of truth** (council U-series). Do not re-fork the gitleaks (or any shared) logic into a consumer repo. Need different behaviour? Add a typed `workflow_call` input here — no copy-paste variants.
+2. **Single source of truth** (council U-series). Do not re-fork shared policy logic into a consumer repo. Need different behaviour? Add a typed `workflow_call` input here — no copy-paste variants.
 3. **Version is contract-governed.** `shared-secrets-scan.yml`'s `gitleaks-version` default must equal `Modelsmith/config/cross-repo-release-contract.json :: qualityBaseline.secretsScan.version`. Modelsmith's `npm run cross-repo:contract` fails closed on drift.
 4. **No secrets, no agent-instruction files in git.** This repo is public; it holds reusable workflows only. No `CLAUDE.md`/`AGENTS.md`/`.env`/credentials.
 
@@ -35,5 +49,6 @@ jobs:
 - `agentsia-uk/Modelsmith` (private)
 - `agentsia-uk/agentsia-web` (private)
 - `agentsia-uk/assay-harness` (public)
+- every other current and future `agentsia-uk` repository through the organisation PR-label bootstrap/audit
 
 Licensed under Apache-2.0.
