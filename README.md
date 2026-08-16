@@ -32,10 +32,12 @@ also rejects retired, case-variant, or otherwise pillar-like labels so one PR
 cannot be attributed to two pillars. The workflow checks out no contributor
 code and needs only `contents: read` plus `pull-requests: read`.
 
-Every consumer must trigger the SHA-pinned workflow for opened, reopened,
-synchronized, converted-to-ready, labeled, and unlabeled PR events. Repository
-rulesets then require the resulting `Validate mutually exclusive PR labels`
-status before merge.
+The organisation ruleset should require this SHA-pinned workflow on the
+default branch of every repository. That makes the policy fail closed for
+current and future repositories without copying a caller into each one.
+Repository-local SHA-pinned callers and required-status rules remain the
+compatible fallback where an organisation required-workflow rule is not
+available.
 
 ## Rules
 
