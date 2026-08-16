@@ -49,7 +49,7 @@ jobs:
           const changeTypeMatches = [...new Set(labels.filter((label) => changeTypes.has(label)))];
           const pillarMatches = [...new Set(labels.filter((label) => pillars.has(label)))];
           const invalidPillarLabels = [...new Set(labels.filter((label) =>
-            /^(?:pillar(?:[-:]|\s)|p[1-8](?:\b|[-:]))/i.test(label) && !pillars.has(label),
+            /^pillar(?:$|[-_: /])/i.test(label) && !pillars.has(label),
           ))];
 
           const failures = [];
