@@ -1,0 +1,68 @@
+name: Organisation PR label policy
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate mutually exclusive PR labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read live labels and enforce the organisation taxonomy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Organisation PR label policy requires a pull_request event"
+            exit 1
+          fi
+
+          labels_json="$({
+            curl --fail-with-body --silent --show-error \
+              --retry 2 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER"
+          } | jq -c '[.labels[].name]')"
+          export LABELS_JSON="$labels_json"
+
+          node <<'NODE'
+          const labels = JSON.parse(process.env.LABELS_JSON);
+          if (!Array.isArray(labels) || labels.some((label) => typeof label !== 'string')) {
+            throw new Error('GitHub returned a malformed pull-request label set');
+          }
+
+          const changeTypes = new Set(['bug', 'enhancement', 'documentation', 'type:tech-debt']);
+          const pillars = new Set(Array.from({ length: 8 }, (_, index) => `pillar-${index + 1}`));
+          const changeTypeMatches = [...new Set(labels.filter((label) => changeTypes.has(label)))];
+          const pillarMatches = [...new Set(labels.filter((label) => pillars.has(label)))];
+          const invalidPillarLabels = [...new Set(labels.filter((label) =>
+            /^(?:pillar(?:[-:]|\s)|p[1-8](?:\b|[-:]))/i.test(label) && !pillars.has(label),
+          ))];
+
+          const failures = [];
+          if (changeTypeMatches.length !== 1) {
+            failures.push(`expected exactly one change type (${[...changeTypes].join(', ')}); observed ${changeTypeMatches.length}`);
+          }
+          if (pillarMatches.length !== 1) {
+            failures.push(`expected exactly one canonical pillar (pillar-1 … pillar-8); observed ${pillarMatches.length}`);
+          }
+          if (invalidPillarLabels.length > 0) {
+            failures.push(`remove non-canonical pillar-like labels: ${invalidPillarLabels.join(', ')}`);
+          }
+
+          if (failures.length > 0) {
+            for (const failure of failures) console.error(`::error::${failure}`);
+            process.exit(1);
+          }
+          console.log(`Validated change type ${changeTypeMatches[0]} and mutually exclusive strategy pillar ${pillarMatches[0]}.`);
+          NODE
