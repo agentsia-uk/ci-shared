@@ -32,12 +32,27 @@ also rejects retired, case-variant, or otherwise pillar-like labels so one PR
 cannot be attributed to two pillars. The workflow checks out no contributor
 code and needs only `contents: read` plus `pull-requests: read`.
 
-The organisation ruleset should require this SHA-pinned workflow on the
+The organisation ruleset should require the SHA-pinned
+`org-required-pr-label-policy.yml` workflow on the
 default branch of every repository. That makes the policy fail closed for
 current and future repositories without copying a caller into each one.
 Repository-local SHA-pinned callers and required-status rules remain the
 compatible fallback where an organisation required-workflow rule is not
 available.
+
+For the organisation-required workflow path, authors can make the strategy
+choice before the PR opens by including two explicit body fields:
+
+```markdown
+Pillar: P4
+Change type: enhancement
+```
+
+That workflow's `pull_request_target` job reads only GitHub's PR metadata, never checks out
+contributor code, creates the fixed canonical labels when a new repository does
+not have them yet, and applies the declared pair before the read-only validation
+job runs. Existing labels and body declarations must agree; conflicts fail
+closed.
 
 ## Rules
 
