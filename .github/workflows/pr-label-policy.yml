@@ -1,9 +1,6 @@
 name: Organisation PR label policy
 
 on:
-  # Required by organisation ruleset workflows so this policy can run in
-  # repositories that do not carry a local caller (including future repos).
-  pull_request:
   workflow_call:
 
 permissions:
