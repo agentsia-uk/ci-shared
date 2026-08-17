@@ -49,10 +49,11 @@ Change type: enhancement
 ```
 
 That workflow's `pull_request_target` job reads only GitHub's PR metadata, never checks out
-contributor code, creates the fixed canonical labels when a new repository does
-not have them yet, and applies the declared pair before the read-only validation
-job runs. Existing labels and body declarations must agree; conflicts fail
-closed.
+contributor code, provisions the complete 12-label canonical catalogue when a
+new repository receives its first PR, and applies the declared pair before the
+read-only validation job runs. The catalogue reconciliation is idempotent, so
+deleted canonical labels are restored on later PR events. Existing labels and
+body declarations must agree; conflicts fail closed.
 
 ## Rules
 

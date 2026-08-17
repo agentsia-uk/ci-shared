@@ -26,6 +26,20 @@ jobs:
         run: |
           set -euo pipefail
           node <<'NODE'
+          const labelCatalogue = new Map(Object.entries({
+            bug: { description: 'Defect or regression' },
+            documentation: { description: 'Documentation-only change' },
+            enhancement: { description: 'Product or platform enhancement' },
+            'type:tech-debt': { description: 'Technical debt reduction' },
+            'pillar-1': { description: 'Closed Iterate Loop' },
+            'pillar-2': { description: 'Agent-Native Operating Model' },
+            'pillar-3': { description: 'Domain Specialist Factory' },
+            'pillar-4': { description: 'Promotion and Governance Control Plane' },
+            'pillar-5': { description: 'Config-Driven Model Lifecycle' },
+            'pillar-6': { description: 'Compounding Knowledge Moat' },
+            'pillar-7': { description: 'Fleet Intelligence and Infrastructure' },
+            'pillar-8': { description: 'Agentic Experimentation' },
+          }));
           const changeTypes = new Set(['bug', 'enhancement', 'documentation', 'type:tech-debt']);
           const pillars = new Set(Array.from({ length: 8 }, (_, index) => `pillar-${index + 1}`));
           const repository = process.env.REPOSITORY;
@@ -65,17 +79,18 @@ jobs:
           }
 
           async function ensureLabel(name) {
+            const metadata = labelCatalogue.get(name);
+            if (!metadata) throw new Error(`cannot provision unknown canonical label ${name}`);
             const encoded = encodeURIComponent(name);
             const existing = await request(`/labels/${encoded}`);
             if (existing.ok) return;
             if (existing.status !== 404) throw new Error(`cannot inspect repository label ${name} (HTTP ${existing.status})`);
-            const isPillar = pillars.has(name);
             const created = await request('/labels', {
               method: 'POST',
               body: JSON.stringify({
                 name,
                 color: 'ededed',
-                description: isPillar ? `Canonical organisation strategy ${name}` : 'Canonical organisation PR change type',
+                description: metadata.description,
               }),
             });
             if (created.ok) return;
@@ -87,6 +102,7 @@ jobs:
             if (!repository || !Number.isSafeInteger(pullRequestNumber) || pullRequestNumber < 1) {
               throw new Error('organisation PR label policy requires a pull_request_target event');
             }
+            await Promise.all([...labelCatalogue.keys()].map(ensureLabel));
             const response = await request(`/pulls/${pullRequestNumber}`);
             if (!response.ok) throw new Error(`cannot read pull request (HTTP ${response.status})`);
             const pullRequest = await response.json();
