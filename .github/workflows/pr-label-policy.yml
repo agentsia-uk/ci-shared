@@ -2,6 +2,12 @@ name: Organisation PR label policy
 
 on:
   workflow_call:
+    inputs:
+      runs-on:
+        description: JSON runner selector passed to fromJSON (labels or a runner-group object)
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
 
 permissions:
   contents: read
@@ -10,7 +16,8 @@ permissions:
 jobs:
   validate:
     name: Validate mutually exclusive PR labels
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
     steps:
       - name: Read live labels and enforce the organisation taxonomy
         env:

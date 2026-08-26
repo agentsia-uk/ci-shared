@@ -40,6 +40,21 @@ Repository-local SHA-pinned callers and required-status rules remain the
 compatible fallback where an organisation required-workflow rule is not
 available.
 
+Reusable callers may pass `runs-on` as a JSON array or runner-group object. It
+defaults to `["ubuntu-latest"]`, preserving GitHub-hosted execution unless a
+consumer explicitly supplies an attested self-hosted selector:
+
+```yaml
+jobs:
+  pr-label-policy:
+    uses: agentsia-uk/ci-shared/.github/workflows/pr-label-policy.yml@<40-char-sha>
+    with:
+      runs-on: '{"group":"modelsmith-pr-jit","labels":"modelsmith-pr-jit"}'
+    permissions:
+      contents: read
+      pull-requests: read
+```
+
 For the organisation-required workflow path, authors can make the strategy
 choice before the PR opens by including two explicit body fields:
 
