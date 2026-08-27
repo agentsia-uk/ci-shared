@@ -2,6 +2,20 @@ name: Organisation required PR label policy
 
 on:
   pull_request_target:
+  # A merge queue evaluates required checks against the merge-group commit, not
+  # against the pull request. Without this trigger the workflow never runs
+  # there, so the required context reports as "Expected — Waiting for workflow
+  # to run" and the entry waits until the queue's status-check timeout drops
+  # it, with nothing red to explain why. Observed on agentsia-uk/Modelsmith
+  # #10438: `PR fast path` and `secrets-scan` both passed on the merge group
+  # while this context never arrived.
+  #
+  # There is nothing to validate on a merge group. Label policy is an ADMISSION
+  # property — GitHub enforces the pull request's required checks before it may
+  # join the queue — and a merge group can contain several pull requests, so
+  # there is no single `github.event.pull_request.number` to read. Both jobs
+  # therefore no-op on this event and simply publish a passing context.
+  merge_group:
 
 permissions:
   contents: read
@@ -139,6 +153,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Read live labels and enforce the organisation taxonomy
+        # Skipped on `merge_group`: there is no pull request to read, and the
+        # step below exits 1 without a numeric PR_NUMBER by design. The job
+        # still succeeds with no steps, which is what publishes the required
+        # context the queue is waiting for.
+        if: github.event_name == 'pull_request_target'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
