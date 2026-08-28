@@ -2,6 +2,16 @@ name: Organisation required PR label policy
 
 on:
   pull_request_target:
+    # Default types (opened, synchronize, reopened) don't include labeled/
+    # unlabeled/ready_for_review. Labels can only be attached in a second API
+    # call after the PR already exists, so an unlabelled-at-open PR fails this
+    # required check permanently -- it never reruns to notice the label that
+    # lands a few seconds later. That forced every PR-creating agent session
+    # into a draft-then-label-then-flip-ready workaround just to dodge this
+    # window, which is why PRs kept landing (and getting stuck) as drafts.
+    # Add the missing types so the check self-heals the moment labels land,
+    # removing the need for that workaround.
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
   # A merge queue evaluates required checks against the merge-group commit, not
   # against the pull request. Without this trigger the workflow never runs
   # there, so the required context reports as "Expected — Waiting for workflow
