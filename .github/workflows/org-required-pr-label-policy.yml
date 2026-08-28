@@ -25,7 +25,15 @@ jobs:
   apply-declarations:
     name: Apply explicit PR label declarations
     if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-latest
+    # 2026-08-28: this required-workflow ruleset (orgs/agentsia-uk/rulesets/
+    # 20927979, ~ALL repos) was still on ubuntu-latest, hard-blocked by the
+    # exhausted Enterprise Actions budget -- every PR in every repo in the
+    # org was stuck on this one check. Neither job checks out contributor
+    # code (label API calls only), so routing to self-hosted carries no
+    # trust-boundary concern. ci-shared-shared-modelsmith-deploy is a new
+    # runner enrolled specifically for this (agentsia-uk/Modelsmith
+    # bootstrap/_lib/enrol-runner.sh + .github/workflows/enrol-ci-shared-runner.yml).
+    runs-on: [self-hosted, Linux, ci]
     permissions:
       contents: read
       issues: write
@@ -150,7 +158,8 @@ jobs:
     name: Validate mutually exclusive PR labels
     needs: [apply-declarations]
     if: always() && (needs.apply-declarations.result == 'success' || needs.apply-declarations.result == 'skipped')
-    runs-on: ubuntu-latest
+    # See apply-declarations above: moved off ubuntu-latest, no PR-code checkout here either.
+    runs-on: [self-hosted, Linux, ci]
     steps:
       - name: Read live labels and enforce the organisation taxonomy
         # Skipped on `merge_group`: there is no pull request to read, and the
