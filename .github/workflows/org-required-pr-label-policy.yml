@@ -47,7 +47,12 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      # The PATCH below targets a PULL REQUEST through the issues endpoint, and
+      # GitHub authorises that against pull-requests, not issues -- so with
+      # `read` here the applier resolved the declaration and then 403'd on the
+      # write its whole design depends on (agentsia-uk/Modelsmith#10051).
+      # `issues: write` stays for the POST /labels that ensureLabel needs.
+      pull-requests: write
     steps:
       - name: Apply declared labels without checking out contributor code
         env:
