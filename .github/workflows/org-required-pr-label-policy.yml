@@ -76,9 +76,10 @@ jobs:
             'pillar-6': { description: 'Compounding Knowledge Moat' },
             'pillar-7': { description: 'Fleet Intelligence and Infrastructure' },
             'pillar-8': { description: 'Agentic Experimentation' },
+            'pillar-9': { description: 'Standalone Distribution' },
           }));
           const changeTypes = new Set(['bug', 'enhancement', 'documentation', 'type:tech-debt']);
-          const pillars = new Set(Array.from({ length: 8 }, (_, index) => `pillar-${index + 1}`));
+          const pillars = new Set(Array.from({ length: 9 }, (_, index) => `pillar-${index + 1}`));
           const repository = process.env.REPOSITORY;
           const pullRequestNumber = Number(process.env.PR_NUMBER);
           const headers = {
@@ -94,7 +95,7 @@ jobs:
 
           function declaredPillars(body) {
             return [...new Set([...body.matchAll(
-              /^\s*(?:[-*]\s*)?(?:\*\*)?(?:product strategy )?pillar(?:\*\*)?\s*:\s*(?:P|pillar-)([1-8])\b/gim,
+              /^\s*(?:[-*]\s*)?(?:\*\*)?(?:product strategy )?pillar(?:\*\*)?\s*:\s*(?:P|pillar-)([1-9])\b/gim,
             )].map((match) => `pillar-${match[1]}`))];
           }
 
@@ -211,7 +212,7 @@ jobs:
           }
 
           const changeTypes = new Set(['bug', 'enhancement', 'documentation', 'type:tech-debt']);
-          const pillars = new Set(Array.from({ length: 8 }, (_, index) => `pillar-${index + 1}`));
+          const pillars = new Set(Array.from({ length: 9 }, (_, index) => `pillar-${index + 1}`));
           const changeTypeMatches = [...new Set(labels.filter((label) => changeTypes.has(label)))];
           const pillarMatches = [...new Set(labels.filter((label) => pillars.has(label)))];
           const invalidPillarLabels = [...new Set(labels.filter((label) =>
@@ -223,7 +224,7 @@ jobs:
             failures.push(`expected exactly one change type (${[...changeTypes].join(', ')}); observed ${changeTypeMatches.length}`);
           }
           if (pillarMatches.length !== 1) {
-            failures.push(`expected exactly one canonical pillar (pillar-1 … pillar-8); observed ${pillarMatches.length}`);
+            failures.push(`expected exactly one canonical pillar (pillar-1 … pillar-9); observed ${pillarMatches.length}`);
           }
           if (invalidPillarLabels.length > 0) {
             failures.push(`remove non-canonical pillar-like labels: ${invalidPillarLabels.join(', ')}`);
