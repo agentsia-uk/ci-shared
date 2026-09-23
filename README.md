@@ -27,7 +27,7 @@ jobs:
 
 Reads the pull request's live labels and fails closed unless there is exactly
 one change type (`bug`, `enhancement`, `documentation`, or `type:tech-debt`)
-and exactly one canonical strategy pillar (`pillar-1` through `pillar-8`). It
+and exactly one canonical strategy pillar (`pillar-1` through `pillar-9`). It
 also rejects retired, case-variant, or otherwise pillar-like labels so one PR
 cannot be attributed to two pillars. The workflow checks out no contributor
 code and needs only `contents: read` plus `pull-requests: read`.
