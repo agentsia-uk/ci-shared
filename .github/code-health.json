@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "policyRef": "869a6d69a423b94bf69458358b34d3cff47a3ea5",
-  "workflowRef": "a33c2a23020943196b8dfa73b756fe17c928675e",
+  "policyRef": "df210a1cf34f626cc5da0586271ae2310f615a38",
+  "workflowRef": "b59d4a48a5b90bea4581a0d4c67e97a5d3cb939e",
   "areas": [
     {
       "id": "ci-shared-python",
