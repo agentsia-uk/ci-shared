@@ -136,11 +136,13 @@ permissions:
 jobs:
   code-health:
     uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@<same-40-character-SHA>
+    with:
+      runs-on: '<JSON selector for the repository-approved isolated CI pool>'
     permissions:
       contents: read
 ```
 
-The shared workflow uses a GitHub-hosted ephemeral Linux runner, does not
+The shared workflow requires the consumer's existing approved isolated Linux CI pool, with no hosted fallback. It does not
 install application dependencies or run application scripts, and never
 receives application secrets. The verifier and policy come from the frozen
 shared action rather than the candidate checkout. Scanner configuration is

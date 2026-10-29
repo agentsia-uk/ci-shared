@@ -1,4 +1,6 @@
 import copy
+import contextlib
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -154,6 +156,39 @@ class RatchetTests(unittest.TestCase):
             touched, renames = r.changed_paths(repo, base, git('rev-parse', 'HEAD'))
             self.assertEqual({'old name.py', 'new name.py', 'removed.py'}, touched)
             self.assertEqual({'old name.py': 'new name.py'}, renames)
+
+    def test_cli_scans_real_git_snapshots_and_ignores_committed_local_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            repo = root / 'repo'
+            repo.mkdir()
+            git = lambda *args: subprocess.check_output(['git', *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / '.github/workflows').mkdir(parents=True)
+            (repo / '.github/code-health.json').write_text(json.dumps(config()))
+            (repo / '.github/workflows/health.yml').write_text('on: [pull_request, merge_group]\njobs:\n  health:\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'a' * 40 + '\n')
+            (repo / '.desloppify').mkdir()
+            (repo / '.desloppify/config.json').write_text('{"ignore": ["*"], "trust_plugins": true}')
+            (repo / 'service.py').write_text('def handle(value):\n    return str(value)\n')
+            git('add', '.')
+            git('commit', '-qm', 'before')
+            base = git('rev-parse', 'HEAD')
+            (repo / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
+            git('add', '.')
+            git('commit', '-qm', 'after')
+            head = git('rev-parse', 'HEAD')
+            output = root / 'result'
+            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output)]
+            with patch.object(r.sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(1, r.main())
+            report = json.loads((output / 'result.json').read_text())
+            self.assertEqual(base, report['base'])
+            self.assertEqual(head, report['head'])
+            self.assertTrue(report['areas'][0]['errors'])
+            self.assertNotIn('eval(', json.dumps(report))
+            self.assertEqual(r.POLICY['desloppifyVersion'], report['desloppifyVersion'])
 
     def test_actual_scanner_rejects_new_security_defect(self):
         with tempfile.TemporaryDirectory() as temporary:
