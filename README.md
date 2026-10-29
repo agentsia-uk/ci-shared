@@ -183,6 +183,14 @@ changing only the manifest/workflows. Queued upgrades are independently
 matched to live PR metadata, exact ancestry and the pin carried by that PR.
 This release does not create those upgrade PRs or alter live required checks.
 
+The policy-release helpers build a deterministic bundle from exact committed
+Git blobs and validate its file index, dependency lock and policy version. The
+separate release verifier requires an immutable release and an attestation from
+the pinned qualification workflow. These helpers are not yet wired into a
+release workflow or required gate; their unit tests do not establish that a
+real attestation or a Linux installation has been qualified. The dependency
+lock targets Python 3.13 on Linux x86-64 or ARM64 with glibc 2.34 or newer.
+
 Run the verifier's tests with the pinned scanner installed:
 
 ```sh
