@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from code_health.build_release_bundle import build_bundle
+from code_health.build_release_bundle import build_bundle, runtime_files
 from code_health.release_bundle import read_bundle
 
 FILES = {'code_health/cli.py', 'code_health/policy.json', 'code_health/requirements.lock'}
@@ -28,6 +28,7 @@ class BuildReleaseBundleTests(unittest.TestCase):
 
     def test_deterministic_bundle_reads_committed_bytes(self):
         (self.root / 'code_health/cli.py').write_text('uncommitted')
+        self.assertEqual(runtime_files(self.root, self.commit), FILES)
         data = build_bundle(self.root, self.commit, FILES)
         self.assertEqual(data, build_bundle(self.root, self.commit, FILES))
         manifest, files, _ = read_bundle(data, policy_commit=self.commit, allowed_files=FILES)
@@ -48,6 +49,14 @@ class BuildReleaseBundleTests(unittest.TestCase):
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
         with self.assertRaises(ValueError):
             build_bundle(self.root, commit, FILES)
+
+    def test_runtime_selection_ignores_uncommitted_and_non_runtime_files(self):
+        (self.root / 'code_health/uncommitted.py').write_text('ignored')
+        (self.root / 'code_health/notes.txt').write_text('ignored')
+        subprocess.run(['git', 'add', 'code_health/notes.txt'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'notes'], cwd=self.root, check=True)
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
+        self.assertEqual(runtime_files(self.root, commit), FILES)
 
     def test_ignores_poisoned_git_path_and_inherited_git_directory(self):
         fake_bin = self.root / 'bin'

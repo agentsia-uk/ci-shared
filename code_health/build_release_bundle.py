@@ -1,13 +1,32 @@
 """Build a deterministic policy bundle from exact committed Git blobs."""
 import hashlib
+import argparse
 import io
 import json
 import os
-from pathlib import PurePosixPath
+import re
+from pathlib import Path, PurePosixPath
 import subprocess
 import tarfile
 
 from .release_bundle import COMMIT, MAX_BUNDLE_BYTES
+
+RUNTIME_SOURCE = re.compile(r'code_health/[a-z_][a-z0-9_]*\.py\Z')
+
+
+def runtime_files(repo: str | os.PathLike[str], commit: str) -> set[str]:
+    """Select only top-level Python modules and the fixed policy/lock files."""
+    if not COMMIT.fullmatch(commit):
+        raise ValueError('release commit must be a full SHA')
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    raw = subprocess.run(['/usr/bin/git', 'ls-tree', '-r', '-z', '--name-only', f'{commit}^{{commit}}', '--', 'code_health'],
+                         cwd=repo, env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120).stdout
+    names = [name.decode('utf-8') for name in raw.split(b'\0') if name]
+    result = {name for name in names if RUNTIME_SOURCE.fullmatch(name)}
+    result.update({'code_health/policy.json', 'code_health/requirements.lock'})
+    if 'code_health/cli.py' not in result:
+        raise ValueError('policy entrypoint is missing')
+    return result
 
 
 def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[str]) -> bytes:
@@ -64,3 +83,16 @@ def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[s
     if len(output.getvalue()) > MAX_BUNDLE_BYTES:
         raise ValueError('policy bundle exceeds the size limit')
     return output.getvalue()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--repo', type=Path, required=True)
+    parser.add_argument('--commit', required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    args.output.write_bytes(build_bundle(args.repo, args.commit, runtime_files(args.repo, args.commit)))
+
+
+if __name__ == '__main__':
+    main()
