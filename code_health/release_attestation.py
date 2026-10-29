@@ -17,7 +17,8 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 def read_command(argv: list[str], *, timeout: float = 120, limit: int = MAX_RESPONSE_BYTES) -> bytes:
     """Bound both output and elapsed time without retaining sensitive stderr."""
-    child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    env = {key: value for key, value in os.environ.items() if key != 'RELEASE_ADMIN_READ_TOKEN'}
+    child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
     deadline = time.monotonic() + timeout
     chunks = []
     total = 0

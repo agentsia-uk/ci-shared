@@ -61,3 +61,8 @@ class ReleaseAttestationTests(unittest.TestCase):
             read_command([sys.executable, '-c', 'print("x" * 10000)'], limit=128)
         with self.assertRaises(subprocess.TimeoutExpired):
             read_command([sys.executable, '-c', 'import time; time.sleep(5)'], timeout=0.1)
+
+    def test_read_only_administration_token_is_not_inherited_by_cli(self):
+        with patch.dict('os.environ', {'RELEASE_ADMIN_READ_TOKEN': 'test-secret'}):
+            result = read_command([sys.executable, '-c', 'import os; print("present" if "RELEASE_ADMIN_READ_TOKEN" in os.environ else "absent")'])
+        self.assertEqual(result, b'absent\n')
