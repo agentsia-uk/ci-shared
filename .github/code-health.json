@@ -1,11 +1,19 @@
 {
   "schemaVersion": 1,
-  "policyRef": "6a1b6d24f1f5802b982b60da1997326d29767f66",
-  "workflowRef": "9349cc81af77752d85c477d24fae56c9064bdd9e",
+  "policyRef": "869a6d69a423b94bf69458358b34d3cff47a3ea5",
+  "workflowRef": "a33c2a23020943196b8dfa73b756fe17c928675e",
   "areas": [
-    {"id": "ci-shared-python", "language": "python", "path": ".", "exclusions": []}
+    {
+      "id": "ci-shared-python",
+      "language": "python",
+      "path": ".",
+      "exclusions": []
+    }
   ],
   "unsupportedLanguages": [
-    {"language": "yaml", "rationale": "Workflow and action metadata are validated by actionlint; the pinned scanner has no YAML language plugin."}
+    {
+      "language": "yaml",
+      "rationale": "Workflow and action metadata are validated by actionlint; the pinned scanner has no YAML language plugin."
+    }
   ]
 }
