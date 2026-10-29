@@ -20,7 +20,7 @@ def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[s
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
 
     def git(*args):
-        return subprocess.run(['git', *args], cwd=repo, env=env, check=True, stdout=subprocess.PIPE,
+        return subprocess.run(['/usr/bin/git', *args], cwd=repo, env=env, check=True, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=120).stdout
 
     files = {}

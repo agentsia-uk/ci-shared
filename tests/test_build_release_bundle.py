@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from code_health.build_release_bundle import build_bundle
 from code_health.release_bundle import read_bundle
@@ -47,3 +48,15 @@ class BuildReleaseBundleTests(unittest.TestCase):
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
         with self.assertRaises(ValueError):
             build_bundle(self.root, commit, FILES)
+
+    def test_ignores_poisoned_git_path_and_inherited_git_directory(self):
+        fake_bin = self.root / 'bin'
+        fake_bin.mkdir()
+        marker = self.root / 'fake-git-called'
+        fake_git = fake_bin / 'git'
+        fake_git.write_text(f'#!/bin/sh\ntouch "{marker}"\nexit 93\n')
+        fake_git.chmod(0o755)
+        with patch.dict('os.environ', {'PATH': str(fake_bin), 'GIT_DIR': str(self.root / 'wrong')}):
+            data = build_bundle(self.root, self.commit, FILES)
+        self.assertFalse(marker.exists())
+        self.assertEqual(read_bundle(data, policy_commit=self.commit, allowed_files=FILES)[1]['code_health/cli.py'], b'committed')
