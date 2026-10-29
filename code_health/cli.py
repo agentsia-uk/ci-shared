@@ -28,6 +28,7 @@ else:
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
 MAX_CONFIG_BYTES = 1024 * 1024
+GIT_EXECUTABLE = '/usr/bin/git'
 LANGUAGES = set(available_langs())
 
 
@@ -177,7 +178,7 @@ def upgrade_evidence(event, args, touched):
                 continue
             sha = pr['head']['sha']
             require(re.fullmatch('[0-9a-f]{40}', sha), 'invalid upgrade head SHA')
-            contained = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
+            contained = git_process(['merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             require(contained.returncode in {0, 1}, 'could not verify queued upgrade ancestry')
             if contained.returncode:
                 continue
@@ -216,8 +217,20 @@ def validate_language_coverage(files, areas):
         require(covered, f'supported source file is outside declared language areas: {file}')
 
 
+def git_process(args, *, cwd, env=None, **kwargs):
+    # Preserve normal repository/global config (including safe.directory), but
+    # reject inherited overrides of the repository, object store or configuration.
+    source = os.environ if env is None else env
+    clean = {key: value for key, value in source.items() if not key.startswith('GIT_')}
+    clean['GIT_NO_REPLACE_OBJECTS'] = '1'
+    return subprocess.run([GIT_EXECUTABLE, *args], cwd=cwd, env=clean, timeout=1800, **kwargs)
+
+
 def run(args, *, cwd, env=None):
-    result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=1800)
+    if args[0] == 'git':
+        result = git_process(args[1:], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    else:
+        result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=1800)
     return result.stdout
 
 
@@ -252,7 +265,7 @@ def trusted_dismissals(repo, head, repository, areas):
     require(token, 'dismissal imports require read-only authenticated PR metadata')
 
     def contains(sha):
-        ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, head], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
+        ancestry = git_process(['merge-base', '--is-ancestor', sha, head], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         require(ancestry.returncode in {0, 1}, 'could not verify dismissal PR ancestry')
         return ancestry.returncode == 0
 
@@ -363,7 +376,7 @@ def snapshot(repo, sha, destination):
     batch = destination.parent / f'{destination.name}.blobs'
     with batch.open('wb') as output:
         requests = b''.join(oid + b'\n' for _, oid, _ in entries)
-        subprocess.run(['git', 'cat-file', '--batch'], input=requests, cwd=repo, stdout=output, stderr=subprocess.PIPE, check=True, timeout=1800)
+        git_process(['cat-file', '--batch'], input=requests, cwd=repo, stdout=output, stderr=subprocess.PIPE, check=True)
     with batch.open('rb') as source:
         for mode, oid, path in entries:
             header = source.readline().split()

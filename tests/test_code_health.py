@@ -245,6 +245,42 @@ class RatchetTests(unittest.TestCase):
             self.assertEqual({'old name.py', 'new name.py', 'removed.py'}, touched)
             self.assertEqual({'old name.py': 'new name.py'}, renames)
 
+    def test_git_boundary_ignores_path_environment_and_replacement_objects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            repo = root / 'repo'
+            repo.mkdir()
+            git = lambda *args: subprocess.check_output([r.GIT_EXECUTABLE, *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'source.py').write_text('original = True\n')
+            git('add', '.')
+            git('commit', '-qm', 'original')
+            original = git('rev-parse', 'HEAD')
+            (repo / 'source.py').write_text('replacement = True\n')
+            git('add', '.')
+            git('commit', '-qm', 'replacement')
+            replacement = git('rev-parse', 'HEAD')
+            worktree = root / 'linked-worktree'
+            git('worktree', 'add', '--quiet', '--detach', str(worktree), original)
+            git('replace', original, replacement)
+            self.assertEqual('replacement = True', git('show', f'{original}:source.py'))
+            binary = root / 'bin'
+            binary.mkdir()
+            marker = root / 'shadow-ran'
+            shadow = binary / 'git'
+            shadow.write_text('#!/bin/sh\nprintf shadow > "' + str(marker) + '"\nexec /usr/bin/git "$@"\n')
+            shadow.chmod(0o755)
+            overrides = {'PATH': str(binary), 'GIT_DIR': str(root / 'wrong.git'), 'GIT_WORK_TREE': str(root / 'wrong-tree'), 'GIT_OBJECT_DIRECTORY': str(root / 'wrong-objects'), 'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(root / 'wrong-alternates'), 'GIT_INDEX_FILE': str(root / 'wrong-index'), 'GIT_CONFIG_GLOBAL': str(root / 'wrong-config'), 'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.bare', 'GIT_CONFIG_VALUE_0': 'true', 'GIT_NO_REPLACE_OBJECTS': '0'}
+            with patch.dict(r.os.environ, overrides):
+                self.assertEqual(b'original = True\n', r.git_blob(worktree, original, 'source.py', max_bytes=100))
+                r.snapshot(worktree, original, root / 'snapshot')
+                result = r.git_process(['merge-base', '--is-ancestor', original, replacement], cwd=worktree, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(b'original = True\n', (root / 'snapshot/source.py').read_bytes())
+            self.assertFalse(marker.exists())
+
     def test_cli_scans_real_git_snapshots_and_ignores_committed_local_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
