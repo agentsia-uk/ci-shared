@@ -114,10 +114,12 @@ class PolicyTests(unittest.TestCase):
         args = SimpleNamespace(repository='agentsia-uk/example', repo=Path('.'), head='f' * 40, action_ref='a' * 40)
         def response(*_args, **_kwargs):
             return contextlib.closing(io.BytesIO(json.dumps([pr]).encode()))
-        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', side_effect=[b'e' * 40, json.dumps({'policyRef': 'a' * 40}).encode()]):
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', return_value=b'e' * 40), patch.object(r, 'git_blob', return_value=json.dumps({'policyRef': 'a' * 40}).encode()):
             self.assertEqual({'pullRequest': 1, 'headSha': 'd' * 40}, r.upgrade_evidence(event, args, {'src/app.py', r.CONFIG}))
         with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
             self.assertIsNone(r.upgrade_evidence(event, args, {r.CONFIG}))
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=128)), self.assertRaisesRegex(ValueError, 'could not verify queued upgrade ancestry'):
+            r.upgrade_evidence(event, args, {r.CONFIG})
 
     def test_every_supported_source_language_requires_an_area(self):
         r.validate_language_coverage(['src/a.py', 'README.md'], config()['areas'])
@@ -275,6 +277,54 @@ class RatchetTests(unittest.TestCase):
             self.assertTrue(report['areas'][0]['errors'])
             self.assertNotIn('eval(', json.dumps(report))
             self.assertEqual(r.POLICY['desloppifyVersion'], report['desloppifyVersion'])
+
+    def test_config_absence_is_proved_and_corrupt_base_cannot_skip_transition(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            repo = root / 'repo'
+            repo.mkdir()
+            git = lambda *args: subprocess.check_output(['git', *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / '.github/workflows').mkdir(parents=True)
+            (repo / '.github/workflows/health.yml').write_text('on: [pull_request, merge_group]\njobs:\n  health:\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n')
+            (repo / 'service.py').write_text('def handle(value):\n    return str(value)\n')
+            git('add', '.')
+            git('commit', '-qm', 'no manifest')
+            absent = git('rev-parse', 'HEAD')
+            self.assertIsNone(r.git_blob(repo, absent, r.CONFIG, max_bytes=r.MAX_CONFIG_BYTES, optional=True))
+            with self.assertRaisesRegex(ValueError, 'required Git blob is absent'):
+                r.git_blob(repo, absent, r.CONFIG, max_bytes=r.MAX_CONFIG_BYTES)
+            (repo / r.CONFIG).write_text(json.dumps(config()))
+            git('add', '.')
+            git('commit', '-qm', 'onboarding manifest')
+            head = git('rev-parse', 'HEAD')
+            argv = ['ratchet', '--repo', str(repo), '--base', absent, '--head', head, '--output', str(root / 'onboarded'), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head]
+            with patch.object(r.sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, r.main())
+            (repo / r.CONFIG).write_text(json.dumps({**config(), 'strictTarget': 95}))
+            git('add', '.')
+            git('commit', '-qm', 'strict base')
+            base = git('rev-parse', 'HEAD')
+            oid = git('rev-parse', f'{base}:{r.CONFIG}')
+            subtree = git('rev-parse', f'{base}:.github')
+            (repo / r.CONFIG).write_text(json.dumps(config()))
+            git('add', '.')
+            git('commit', '-qm', 'attempted weakening')
+            head = git('rev-parse', 'HEAD')
+            argv[argv.index('--base') + 1] = base
+            argv[argv.index('--head') + 1] = head
+            argv[argv.index('--caller-sha') + 1] = head
+            with patch.object(r.sys, 'argv', argv), self.assertRaisesRegex(ValueError, 'cannot lower'):
+                r.main()
+            (repo / '.git/objects' / oid[:2] / oid[2:]).unlink()
+            with patch.object(r.sys, 'argv', argv), patch.object(r, 'validate_transition', wraps=r.validate_transition) as transition, self.assertRaises(subprocess.CalledProcessError):
+                r.main()
+            transition.assert_not_called()
+            (repo / '.git/objects' / subtree[:2] / subtree[2:]).unlink()
+            with self.assertRaises(subprocess.CalledProcessError):
+                r.git_blob(repo, base, r.CONFIG, max_bytes=r.MAX_CONFIG_BYTES, optional=True)
 
     def test_new_area_has_no_fabricated_baseline_score(self):
         area = dict(config()['areas'][0], path='new-project')

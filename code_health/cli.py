@@ -27,6 +27,7 @@ else:
 
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
+MAX_CONFIG_BYTES = 1024 * 1024
 LANGUAGES = set(available_langs())
 
 
@@ -157,7 +158,7 @@ def authorized_upgrade(event, repository, touched):
 def upgrade_evidence(event, args, touched):
     if authorized_upgrade(event, args.repository, touched):
         pr = event['pull_request']
-        pin = json.loads(run(['git', 'show', f"{pr['head']['sha']}:{CONFIG}"], cwd=args.repo)).get('policyRef')
+        pin = json.loads(git_blob(args.repo, pr['head']['sha'], CONFIG, max_bytes=MAX_CONFIG_BYTES)).get('policyRef')
         if pin == args.action_ref:
             return {'pullRequest': pr['number'], 'headSha': pr['head']['sha']}
     if 'merge_group' not in event:
@@ -177,12 +178,12 @@ def upgrade_evidence(event, args, touched):
             sha = pr['head']['sha']
             require(re.fullmatch('[0-9a-f]{40}', sha), 'invalid upgrade head SHA')
             contained = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
-            require(contained.returncode in {0, 1, 128}, 'could not verify queued upgrade ancestry')
+            require(contained.returncode in {0, 1}, 'could not verify queued upgrade ancestry')
             if contained.returncode:
                 continue
             ancestor = run(['git', 'merge-base', pr['base']['sha'], sha], cwd=args.repo).decode().strip()
             paths, _ = changed_paths(args.repo, ancestor, sha)
-            pin = json.loads(run(['git', 'show', f'{sha}:{CONFIG}'], cwd=args.repo)).get('policyRef')
+            pin = json.loads(git_blob(args.repo, sha, CONFIG, max_bytes=MAX_CONFIG_BYTES)).get('policyRef')
             if pin == args.action_ref and authorized_upgrade({'pull_request': pr}, args.repository, paths):
                 return {'pullRequest': pr['number'], 'headSha': sha}
         if len(prs) < 100:
@@ -220,19 +221,29 @@ def run(args, *, cwd, env=None):
     return result.stdout
 
 
-def trusted_dismissals(repo, head, repository, areas):
-    tree = run(['git', 'ls-tree', '-z', '--full-tree', f'{head}^{{commit}}', '--', dismissals.LEDGER], cwd=repo)
+def git_blob(repo, sha, path, *, max_bytes, optional=False):
+    relative_path(path)
+    require(re.fullmatch('[0-9a-f]{40}', sha), 'Git blob lookup requires an exact commit SHA')
+    tree = run(['git', 'ls-tree', '-z', '--full-tree', f'{sha}^{{commit}}', '--', path], cwd=repo)
     if not tree:
-        return [], None
+        require(optional, f'required Git blob is absent: {path}')
+        return None
     entries = tree.split(b'\0')
-    require(len(entries) == 2 and entries[-1] == b'', 'invalid dismissal ledger tree entry')
-    metadata, path = entries[0].split(b'\t', 1)
+    require(len(entries) == 2 and entries[-1] == b'', 'invalid exact Git tree entry')
+    metadata, actual_path = entries[0].split(b'\t', 1)
     mode, kind, oid = metadata.split()
-    require(path == dismissals.LEDGER.encode() and kind == b'blob' and mode in {b'100644', b'100755'} and re.fullmatch(b'[0-9a-f]{40}', oid), 'dismissal ledger must be an exact regular Git blob')
+    require(actual_path == path.encode() and kind == b'blob' and mode in {b'100644', b'100755'} and re.fullmatch(b'[0-9a-f]{40}', oid), 'path must be an exact regular Git blob')
     size = run(['git', 'cat-file', '-s', oid.decode()], cwd=repo).strip()
-    require(size.isdigit() and int(size) <= dismissals.MAX_LEDGER_BYTES, 'dismissal ledger exceeds the size limit')
+    require(size.isdigit() and int(size) <= max_bytes, 'Git blob exceeds the size limit')
     raw = run(['git', 'cat-file', 'blob', oid.decode()], cwd=repo)
-    require(len(raw) == int(size), 'dismissal ledger blob read was incomplete')
+    require(len(raw) == int(size), 'Git blob read was incomplete')
+    return raw
+
+
+def trusted_dismissals(repo, head, repository, areas):
+    raw = git_blob(repo, head, dismissals.LEDGER, max_bytes=dismissals.MAX_LEDGER_BYTES, optional=True)
+    if raw is None:
+        return [], None
     ledger = json.loads(raw)
     entries = dismissals.validate_ledger(ledger, {a['id'] for a in areas}, POLICY['desloppifyVersion'])
     if not entries:
@@ -242,7 +253,7 @@ def trusted_dismissals(repo, head, repository, areas):
 
     def contains(sha):
         ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, head], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
-        require(ancestry.returncode in {0, 1, 128}, 'could not verify dismissal PR ancestry')
+        require(ancestry.returncode in {0, 1}, 'could not verify dismissal PR ancestry')
         return ancestry.returncode == 0
 
     records = dismissals.authenticate(entries, repository, api=dismissals.github_reader(repository, token), contains=contains)
@@ -438,10 +449,9 @@ def main():
     args.repo = repo
     for sha in [args.base, args.head]:
         run(['git', 'rev-parse', '--verify', f'{sha}^{{commit}}'], cwd=repo)
-    base_bytes = subprocess.run(['git', 'show', f'{args.base}:{CONFIG}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
-    require(base_bytes.returncode in {0, 128}, 'could not read base config')
-    base = validate_config(json.loads(base_bytes.stdout)) if base_bytes.returncode == 0 else None
-    head = validate_config(json.loads(run(['git', 'show', f'{args.head}:{CONFIG}'], cwd=repo)))
+    base_bytes = git_blob(repo, args.base, CONFIG, max_bytes=MAX_CONFIG_BYTES, optional=True)
+    base = validate_config(json.loads(base_bytes)) if base_bytes is not None else None
+    head = validate_config(json.loads(git_blob(repo, args.head, CONFIG, max_bytes=MAX_CONFIG_BYTES)))
     touched, renames = changed_paths(repo, args.base, args.head)
     event_path = os.environ.get('GITHUB_EVENT_PATH')
     event = read_json(Path(event_path)) if event_path else {}
