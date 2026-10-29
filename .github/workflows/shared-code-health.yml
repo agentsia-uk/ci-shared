@@ -51,7 +51,7 @@ jobs:
               output.write(f'base={base}\nhead={head}\n')
           PY
       - name: Enforce the shared policy
-        uses: agentsia-uk/ci-shared/code-health@6a1b6d24f1f5802b982b60da1997326d29767f66
+        uses: agentsia-uk/ci-shared/code_health@869a6d69a423b94bf69458358b34d3cff47a3ea5
         with:
           repository-path: ${{ github.workspace }}/code-health-source
           base-sha: ${{ steps.commits.outputs.base }}
