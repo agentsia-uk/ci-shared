@@ -1,7 +1,6 @@
 import copy
 import contextlib
 import io
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,11 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SCRIPT = Path(__file__).parents[1] / 'code-health/ratchet.py'
-spec = importlib.util.spec_from_file_location('ratchet', SCRIPT)
-r = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(r)
+from code_health import cli as r
 
+SCRIPT = Path(__file__).parents[1] / 'code_health/cli.py'
 
 def config():
     return {'schemaVersion': 1, 'policyRef': 'a' * 40, 'workflowRef': 'b' * 40, 'areas': [{'id': 'app-python', 'language': 'python', 'path': '.', 'exclusions': []}]}
@@ -73,6 +70,14 @@ class PolicyTests(unittest.TestCase):
         for text in invalid:
             with self.subTest(text=text), patch.object(r, 'run', return_value=text.encode()), self.assertRaises(ValueError):
                 r.validate_workflow_pin(Path('.'), 'a' * 40, workflow_path, 'b' * 40)
+
+    def test_yaml_loader_preserves_actions_scalars_without_constructing_objects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / 'must-not-exist'
+            text = ('metadata: !!python/object/apply:os.system ["touch ' + str(marker) + '"]\non: [pull_request, merge_group]\njobs:\n  health:\n    continue-on-error: false\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n').encode()
+            with patch.object(r, 'run', return_value=text):
+                r.validate_workflow_pin(Path('.'), 'c' * 40, '.github/workflows/health.yml', 'b' * 40)
+            self.assertFalse(marker.exists())
 
     def test_policy_provenance_is_bound_to_actual_action_and_caller(self):
         args = SimpleNamespace(action_repository='agentsia-uk/ci-shared', action_ref='a' * 40, caller_sha='c' * 40, caller_ref='agentsia-uk/example/.github/workflows/actual.yml@refs/pull/1/merge', repository='agentsia-uk/example')

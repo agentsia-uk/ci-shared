@@ -17,6 +17,8 @@ import tempfile
 import urllib.parse
 import urllib.request
 
+import yaml
+
 from desloppify.languages import available_langs, get_lang
 
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
@@ -94,11 +96,10 @@ def validate_transition(base, head, *, upgrade=False):
 
 
 def validate_workflow_pin(repo, sha, workflow_path, workflow_ref):
-    import yaml
-
     relative_path(workflow_path)
     require(workflow_path.startswith('.github/workflows/') and workflow_path.endswith(('.yml', '.yaml')), 'caller workflow path is invalid')
     expected = f'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@{workflow_ref}'
+    # BaseLoader preserves Actions scalars and cannot construct tagged Python objects.
     workflow = yaml.load(run(['git', 'show', f'{sha}:{workflow_path}'], cwd=repo), Loader=yaml.BaseLoader)
     require(isinstance(workflow, dict) and isinstance(workflow.get('jobs'), dict), 'caller workflow has no jobs')
     found = False
@@ -169,7 +170,7 @@ def upgrade_evidence(event, args, touched):
                 continue
             sha = pr['head']['sha']
             require(re.fullmatch('[0-9a-f]{40}', sha), 'invalid upgrade head SHA')
-            contained = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            contained = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
             require(contained.returncode in {0, 1, 128}, 'could not verify queued upgrade ancestry')
             if contained.returncode:
                 continue
@@ -353,7 +354,7 @@ def main():
     args.repo = repo
     for sha in [args.base, args.head]:
         run(['git', 'rev-parse', '--verify', f'{sha}^{{commit}}'], cwd=repo)
-    base_bytes = subprocess.run(['git', 'show', f'{args.base}:{CONFIG}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    base_bytes = subprocess.run(['git', 'show', f'{args.base}:{CONFIG}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
     require(base_bytes.returncode in {0, 128}, 'could not read base config')
     base = validate_config(json.loads(base_bytes.stdout)) if base_bytes.returncode == 0 else None
     head = validate_config(json.loads(run(['git', 'show', f'{args.head}:{CONFIG}'], cwd=repo)))

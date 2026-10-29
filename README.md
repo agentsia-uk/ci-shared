@@ -89,7 +89,7 @@ Licensed under Apache-2.0.
 
 ### Shared code-health policy and mechanical ratchet
 
-`code-health/policy.json` is the shared policy contract. The strict-score target
+`code_health/policy.json` is the shared policy contract. The strict-score target
 is at least 90 in each coherent project/language area. Subjective reviews use
 `claude-opus-5-5` at high effort every 30 days, with a calibration break when
 the reviewer changes. Subjective scores do not gate merges.

@@ -40,7 +40,7 @@ runs:
         CODE_HEALTH_GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        python "${POLICY_ROOT}/ratchet.py" --repo "${REPOSITORY_PATH}" \
+        python "${POLICY_ROOT}/cli.py" --repo "${REPOSITORY_PATH}" \
           --base "${BASE_SHA}" --head "${HEAD_SHA}" --output "${OUTPUT_PATH}" \
           --repository "${CALLER_REPOSITORY}" --action-repository "${EXECUTING_ACTION_REPOSITORY}" \
           --action-ref "${EXECUTING_ACTION_REF}" --caller-ref "${CALLER_WORKFLOW_REF}" \
