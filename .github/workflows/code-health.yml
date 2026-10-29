@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   mechanical:
-    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@b59d4a48a5b90bea4581a0d4c67e97a5d3cb939e
+    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@a1c704e7d4c118c650eb243907c50db40eadbbb1
     with:
       runs-on: '["ubuntu-latest"]'
     permissions:
