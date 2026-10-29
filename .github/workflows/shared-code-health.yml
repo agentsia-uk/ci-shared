@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   code-health:
@@ -50,7 +51,7 @@ jobs:
               output.write(f'base={base}\nhead={head}\n')
           PY
       - name: Enforce the shared policy
-        uses: agentsia-uk/ci-shared/code-health@ad81a06b585bc1f58e88ac690c98894b539bb129
+        uses: agentsia-uk/ci-shared/code-health@23c945e5c27ee8665dc8268a3efd1d0a80f1ef9d
         with:
           repository-path: ${{ github.workspace }}/code-health-source
           base-sha: ${{ steps.commits.outputs.base }}
