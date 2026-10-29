@@ -20,6 +20,11 @@ import yaml
 
 from desloppify.languages import available_langs, get_lang
 
+if __package__:
+    from . import dismissals
+else:
+    import dismissals
+
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
 LANGUAGES = set(available_langs())
@@ -134,6 +139,7 @@ def execution_provenance(repo, args, config):
         'callerDeclaredWorkflowRef': config['workflowRef'],
         'policySha256': hashlib.sha256(Path(__file__).with_name('policy.json').read_bytes()).hexdigest(),
         'verifierSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        'dismissalsVerifierSha256': hashlib.sha256(Path(dismissals.__file__).read_bytes()).hexdigest(),
         'invocation': 'github-actions' if os.environ.get('GITHUB_ACTIONS') == 'true' else 'local',
     }
 
@@ -212,6 +218,28 @@ def validate_language_coverage(files, areas):
 def run(args, *, cwd, env=None):
     result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=1800)
     return result.stdout
+
+
+def trusted_dismissals(repo, head, repository, areas):
+    result = subprocess.run(['git', 'show', f'{head}:{dismissals.LEDGER}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    require(result.returncode in {0, 128}, 'could not read dismissal ledger')
+    if result.returncode == 128:
+        return [], None
+    require(len(result.stdout) <= dismissals.MAX_LEDGER_BYTES, 'dismissal ledger exceeds the size limit')
+    ledger = json.loads(result.stdout)
+    entries = dismissals.validate_ledger(ledger, {a['id'] for a in areas}, POLICY['desloppifyVersion'])
+    if not entries:
+        return [], dismissals.digest(ledger)
+    token = os.environ.get('CODE_HEALTH_GITHUB_TOKEN')
+    require(token, 'dismissal imports require read-only authenticated PR metadata')
+
+    def contains(sha):
+        ancestry = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, head], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
+        require(ancestry.returncode in {0, 1, 128}, 'could not verify dismissal PR ancestry')
+        return ancestry.returncode == 0
+
+    records = dismissals.authenticate(entries, repository, api=dismissals.github_reader(repository, token), contains=contains)
+    return records, dismissals.digest(ledger)
 
 
 def changed_paths(repo, base, head):
@@ -349,7 +377,7 @@ def snapshot(repo, sha, destination):
         target.symlink_to(link)
 
 
-def scan(snapshot_root, area, output, areas):
+def scan(snapshot_root, area, output, areas, records=()):
     snapshot_root = snapshot_root.resolve()
     root = (snapshot_root / area['path']).resolve()
     require(root.is_relative_to(snapshot_root) and root.is_dir(), 'scan area is missing or escapes its snapshot')
@@ -372,9 +400,15 @@ def scan(snapshot_root, area, output, areas):
     command = [str(Path(sys.executable).with_name('desloppify')), '--lang', area['language']]
     log = run(command + ['scan', '--path', area['path'], '--profile', 'ci', '--no-badge', '--state', str(state)], cwd=snapshot_root, env=env)
     (output / 'scan.log').write_bytes(log)
+    if records:
+        records_path = output / 'trusted-dismissals.json'
+        records_path.write_text(json.dumps(records))
+        run([sys.executable, str(Path(__file__).with_name('dismissals.py')), '--state', str(state), '--root', str(snapshot_root), '--area', area['id'], '--records', str(records_path)], cwd=snapshot_root, env=env)
     status = run(command + ['status', '--state', str(state), '--json'], cwd=snapshot_root, env=env)
     (output / 'status.json').write_bytes(status)
-    return json.loads(status), read_json(state)
+    result = json.loads(status)
+    result['dismissals'] = read_json(output / 'dismissals.json') if records else {'false_positive': 0, 'wontfix': 0, 'inactive': 0}
+    return result, read_json(state)
 
 
 def main():
@@ -407,6 +441,7 @@ def main():
     evidence = upgrade_evidence(event, args, touched) if base is not None and base['policyRef'] != head['policyRef'] else None
     validate_transition(base, head, upgrade=evidence is not None)
     provenance = execution_provenance(repo, args, head)
+    records, ledger_hash = trusted_dismissals(repo, args.head, args.repository, head['areas'])
     files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.head], cwd=repo).decode().rstrip('\0').split('\0')
     base_files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.base], cwd=repo).decode().rstrip('\0').split('\0')
     validate_language_coverage(files, head['areas'])
@@ -417,10 +452,10 @@ def main():
         for name, sha in [('base', args.base), ('head', args.head)]:
             snapshot(repo, sha, root / name)
         for area in head['areas']:
-            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas']) if area_has_source(base_files, area, head['areas']) else (None, None)
-            after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'])
+            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas'], records) if area_has_source(base_files, area, head['areas']) else (None, None)
+            after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'], records)
             result = compare(*before, *after, touched, renames, area['language'])
-            results.append({'area': area['id'], **result})
+            results.append({'area': area['id'], **result, 'dismissalsBefore': before[0]['dismissals'] if before[0] is not None else None, 'dismissalsAfter': after[0]['dismissals']})
     report = {
         'schemaVersion': 1,
         'base': args.base,
@@ -430,6 +465,7 @@ def main():
         'policyChanged': base is not None and base['policyRef'] != head['policyRef'],
         'upgradeEvidence': evidence,
         'configSha256': hashlib.sha256(json.dumps(head, sort_keys=True).encode()).hexdigest(),
+        'dismissalsSha256': ledger_hash,
         'areas': results,
         'unsupportedLanguages': head.get('unsupportedLanguages', []),
     }
