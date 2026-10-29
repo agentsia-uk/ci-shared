@@ -43,12 +43,14 @@ class ReleasePublishTests(unittest.TestCase):
                 value = {'commit': {'sha': self.main_commit}}
             elif url.endswith('/git/refs') and request.get_method() == 'POST':
                 self.assertEqual(request.get_header('Authorization'), 'Bearer test-token')
+                self.assertEqual(request.get_header('Content-type'), 'application/json')
                 data = json.loads(request.data)
                 self.ref = {'ref': data['ref'], 'object': {'type': 'commit', 'sha': data['sha']}}
                 value = self.ref
             elif '/git/ref/tags/' in url:
                 value = self.ref
             elif '/assets?name=' in url and request.get_method() == 'POST':
+                self.assertEqual(request.get_header('Content-type'), 'application/octet-stream')
                 if self.replace_before_upload:
                     self.release = {**self.valid_draft(), 'id': 13}
                     raise urllib.error.HTTPError(url, 404, 'release replaced', {}, None)
@@ -57,6 +59,7 @@ class ReleasePublishTests(unittest.TestCase):
                                            'digest': 'sha256:' + hashlib.sha256(request.data).hexdigest()}]
                 value = self.release['assets'][0]
             elif url.endswith('/releases/12') and request.get_method() == 'PATCH':
+                self.assertEqual(request.get_header('Content-type'), 'application/json')
                 if self.replace_before_publish:
                     self.release = {**self.valid_draft(), 'id': 13}
                     raise urllib.error.HTTPError(url, 404, 'release replaced', {}, None)

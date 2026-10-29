@@ -34,6 +34,8 @@ def publish(asset: Path, policy_commit: str) -> None:
         headers = {'Authorization': 'Bearer ' + (admin_read_token if admin else token), 'Accept': 'application/vnd.github+json'}
         if upload is not None:
             headers['Content-Type'] = 'application/octet-stream'
+        elif body is not None:
+            headers['Content-Type'] = 'application/json'
         request = urllib.request.Request(f'https://{host}/repos/{REPOSITORY}/{path}', headers=headers,
             data=upload if upload is not None else json.dumps(body).encode() if body is not None else None,
             method=request_method)
