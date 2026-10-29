@@ -83,6 +83,7 @@ def authenticate(entries, repository, *, api, contains):
         author = pr.get('user', {}).get('login', '')
         check(re.fullmatch(r'[A-Za-z0-9_-]+(?:\[bot\])?', author), 'invalid dismissal PR author')
         permission = api('collaborators/' + urllib.parse.quote(author, safe='') + '/permission')
+        # GitHub's effective legacy permission maps maintain and writable custom roles to write.
         check(permission.get('permission') in {'write', 'admin'}, 'dismissal PR author needs repository write permission')
         check(audit_block(entry) in (pr.get('body') or ''), 'dismissal rationale and attestation are missing from the referenced PR body')
         sha = pr.get('head', {}).get('sha', '')

@@ -221,12 +221,19 @@ def run(args, *, cwd, env=None):
 
 
 def trusted_dismissals(repo, head, repository, areas):
-    result = subprocess.run(['git', 'show', f'{head}:{dismissals.LEDGER}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
-    require(result.returncode in {0, 128}, 'could not read dismissal ledger')
-    if result.returncode == 128:
+    tree = run(['git', 'ls-tree', '-z', '--full-tree', f'{head}^{{commit}}', '--', dismissals.LEDGER], cwd=repo)
+    if not tree:
         return [], None
-    require(len(result.stdout) <= dismissals.MAX_LEDGER_BYTES, 'dismissal ledger exceeds the size limit')
-    ledger = json.loads(result.stdout)
+    entries = tree.split(b'\0')
+    require(len(entries) == 2 and entries[-1] == b'', 'invalid dismissal ledger tree entry')
+    metadata, path = entries[0].split(b'\t', 1)
+    mode, kind, oid = metadata.split()
+    require(path == dismissals.LEDGER.encode() and kind == b'blob' and mode in {b'100644', b'100755'} and re.fullmatch(b'[0-9a-f]{40}', oid), 'dismissal ledger must be an exact regular Git blob')
+    size = run(['git', 'cat-file', '-s', oid.decode()], cwd=repo).strip()
+    require(size.isdigit() and int(size) <= dismissals.MAX_LEDGER_BYTES, 'dismissal ledger exceeds the size limit')
+    raw = run(['git', 'cat-file', 'blob', oid.decode()], cwd=repo)
+    require(len(raw) == int(size), 'dismissal ledger blob read was incomplete')
+    ledger = json.loads(raw)
     entries = dismissals.validate_ledger(ledger, {a['id'] for a in areas}, POLICY['desloppifyVersion'])
     if not entries:
         return [], dismissals.digest(ledger)

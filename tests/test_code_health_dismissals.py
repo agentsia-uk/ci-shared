@@ -75,6 +75,75 @@ class DismissalTrustTests(unittest.TestCase):
         self.assertEqual('d' * 40, records[0]['admittedSha'])
         self.assertEqual('c' * 40, records[0]['headSha'])
 
+    def test_maintain_author_is_admitted_by_github_effective_write_permission(self):
+        value = entry()
+        data = metadata(value)
+        data['collaborators/agent/permission'] = {'permission': 'write', 'role_name': 'maintain'}
+        records = d.authenticate([value], 'agentsia-uk/example', api=data.__getitem__, contains=lambda sha: True)
+        self.assertEqual(value, records[0]['entry'])
+        data['collaborators/agent/permission']['permission'] = 'read'
+        with self.assertRaisesRegex(ValueError, 'write permission'):
+            d.authenticate([value], 'agentsia-uk/example', api=data.__getitem__, contains=lambda sha: True)
+
+    def test_missing_ledger_is_distinct_from_real_git_object_read_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            git = lambda *args: subprocess.check_output(['git', *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / '.github').mkdir()
+            (repo / '.github/unrelated.json').write_text('{}\n')
+            git('add', '.')
+            git('commit', '-qm', 'no ledger')
+            absent = git('rev-parse', 'HEAD')
+            self.assertEqual(([], None), cli.trusted_dismissals(repo, absent, 'agentsia-uk/example', [AREA]))
+            ledger = {'schemaVersion': 1, 'entries': []}
+            (repo / d.LEDGER).write_text(json.dumps(ledger))
+            git('add', '.')
+            git('commit', '-qm', 'ledger')
+            present = git('rev-parse', 'HEAD')
+            self.assertEqual(([], d.digest(ledger)), cli.trusted_dismissals(repo, present, 'agentsia-uk/example', [AREA]))
+            oid = git('rev-parse', f'{present}:{d.LEDGER}')
+            (repo / '.git/objects' / oid[:2] / oid[2:]).unlink()
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                cli.trusted_dismissals(repo, present, 'agentsia-uk/example', [AREA])
+            self.assertEqual(128, failure.exception.returncode)
+            self.assertEqual('cat-file', failure.exception.cmd[1])
+            tree = git('rev-parse', f'{present}:.github')
+            (repo / '.git/objects' / tree[:2] / tree[2:]).unlink()
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                cli.trusted_dismissals(repo, present, 'agentsia-uk/example', [AREA])
+            self.assertEqual('ls-tree', failure.exception.cmd[1])
+            with self.assertRaises(subprocess.CalledProcessError):
+                cli.trusted_dismissals(repo, '0' * 40, 'agentsia-uk/example', [AREA])
+
+    def test_ledger_tree_entry_cannot_be_directory_symlink_or_gitlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            git = lambda *args: subprocess.check_output(['git', *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            target = repo / d.LEDGER
+            target.mkdir(parents=True)
+            (target / 'child.json').write_text('{}\n')
+            git('add', '.')
+            git('commit', '-qm', 'directory')
+            for kind in ['directory', 'symlink', 'gitlink']:
+                if kind == 'symlink':
+                    (target / 'child.json').unlink()
+                    target.rmdir()
+                    target.symlink_to('unrelated.json')
+                    git('add', '.')
+                    git('commit', '-qm', kind)
+                elif kind == 'gitlink':
+                    target.unlink()
+                    git('update-index', '--add', '--cacheinfo', '160000,' + git('rev-parse', 'HEAD') + ',' + d.LEDGER)
+                    git('commit', '-qm', kind)
+                with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'regular Git blob'):
+                    cli.trusted_dismissals(repo, git('rev-parse', 'HEAD'), 'agentsia-uk/example', [AREA])
+
     def test_trusted_git_reader_requires_metadata_and_ancestry(self):
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary)
