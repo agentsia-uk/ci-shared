@@ -51,6 +51,12 @@ def read_command(argv: list[str], *, timeout: float = 120, limit: int = MAX_RESP
         child.stdout.close()
 
 
+def ensure_gh_version() -> None:
+    version = re.match(rb'gh version (\d+)\.(\d+)\.(\d+)(?:\s|$)', read_command([GH_EXECUTABLE, '--version']))
+    if version is None or tuple(int(part) for part in version.groups()) < (2, 102, 0):
+        raise ValueError('GitHub CLI 2.102.0 or newer is required for attestation verification')
+
+
 def verify_release(asset: str | os.PathLike[str], *, policy_commit: str, signer_commit: str) -> str:
     if not SHA.fullmatch(policy_commit) or not SHA.fullmatch(signer_commit):
         raise ValueError('policy and signer commits must be full SHAs')
@@ -59,6 +65,7 @@ def verify_release(asset: str | os.PathLike[str], *, policy_commit: str, signer_
     def gh(*args):
         return read_command([GH_EXECUTABLE, *args])
 
+    ensure_gh_version()
     release = json.loads(gh('api', f'repos/{REPOSITORY}/releases/tags/{tag}'))
     if release.get('immutable') is not True or release.get('draft') is not False or release.get('tag_name') != tag:
         raise ValueError('policy release is not an immutable published release')

@@ -11,13 +11,15 @@ SIGNER = 'b' * 40
 
 
 class ReleaseAttestationTests(unittest.TestCase):
-    def run_verifier(self, *, immutable=True, commit=POLICY, repository_id=REPOSITORY_ID, fail=None):
+    def run_verifier(self, *, immutable=True, commit=POLICY, repository_id=REPOSITORY_ID, fail=None, version='2.102.0'):
         calls = []
 
         def fake_run(argv):
             calls.append(argv)
             if fail is not None and fail in argv:
                 raise subprocess.CalledProcessError(1, argv)
+            if argv[1] == '--version':
+                return f'gh version {version} (test)\n'.encode()
             if argv[1] == 'api' and '/releases/' in argv[2]:
                 value = {'immutable': immutable, 'draft': False, 'tag_name': 'code-health-' + POLICY}
             elif argv[1] == 'api':
@@ -35,16 +37,17 @@ class ReleaseAttestationTests(unittest.TestCase):
     def test_verifies_immutable_release_asset_and_pinned_workflow(self):
         result, calls = self.run_verifier()
         self.assertEqual(result, 'code-health-' + POLICY)
-        self.assertEqual(len(calls), 5)
+        self.assertEqual(len(calls), 6)
         self.assertTrue(all(call[0] == GH_EXECUTABLE for call in calls))
-        self.assertIn('verify-asset', calls[3])
-        self.assertIn('--signer-digest', calls[4])
-        self.assertIn(SIGNER, calls[4])
-        self.assertIn('--source-digest', calls[4])
-        self.assertIn(POLICY, calls[4])
+        self.assertIn('verify-asset', calls[4])
+        self.assertIn('--signer-digest', calls[5])
+        self.assertIn(SIGNER, calls[5])
+        self.assertIn('--source-digest', calls[5])
+        self.assertIn(POLICY, calls[5])
 
     def test_rejects_untrusted_release_and_failed_crypto(self):
-        for kwargs in [{'immutable': False}, {'commit': 'c' * 40}, {'repository_id': '7'}, {'fail': 'verify-asset'}]:
+        for kwargs in [{'immutable': False}, {'commit': 'c' * 40}, {'repository_id': '7'}, {'fail': 'verify-asset'},
+                       {'version': '2.101.0'}, {'version': 'unknown'}]:
             with self.subTest(kwargs=kwargs), self.assertRaises((ValueError, subprocess.CalledProcessError)):
                 self.run_verifier(**kwargs)
 
