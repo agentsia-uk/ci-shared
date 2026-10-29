@@ -1,0 +1,71 @@
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from code_health.build_release_bundle import build_bundle, runtime_files
+from code_health.release_bundle import read_bundle
+
+FILES = {'code_health/cli.py', 'code_health/policy.json', 'code_health/requirements.lock'}
+
+
+class BuildReleaseBundleTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.addCleanup(self.directory.cleanup)
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
+        subprocess.run(['git', 'config', 'user.name', 'fixture'], cwd=self.root, check=True)
+        subprocess.run(['git', 'config', 'user.email', 'fixture@example.test'], cwd=self.root, check=True)
+        (self.root / 'code_health').mkdir()
+        (self.root / 'code_health/cli.py').write_text('committed')
+        (self.root / 'code_health/policy.json').write_text('{"desloppifyVersion":"1.0"}')
+        (self.root / 'code_health/requirements.lock').write_text('locked')
+        subprocess.run(['git', 'add', '.'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'fixture'], cwd=self.root, check=True)
+        self.commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
+
+    def test_deterministic_bundle_reads_committed_bytes(self):
+        (self.root / 'code_health/cli.py').write_text('uncommitted')
+        self.assertEqual(runtime_files(self.root, self.commit), FILES)
+        data = build_bundle(self.root, self.commit, FILES)
+        self.assertEqual(data, build_bundle(self.root, self.commit, FILES))
+        manifest, files, _ = read_bundle(data, policy_commit=self.commit, allowed_files=FILES)
+        self.assertEqual(files['code_health/cli.py'], b'committed')
+        self.assertEqual(manifest['desloppifyVersion'], '1.0')
+
+    def test_rejects_missing_files_and_invalid_refs(self):
+        for commit, paths in [(self.commit, FILES | {'code_health/missing.py'}), ('main', FILES),
+                              (self.commit, FILES | {'code_health/../outside'})]:
+            with self.subTest(commit=commit, paths=paths), self.assertRaises(ValueError):
+                build_bundle(self.root, commit, paths)
+
+    def test_rejects_committed_symlink(self):
+        (self.root / 'code_health/cli.py').unlink()
+        (self.root / 'code_health/cli.py').symlink_to('/etc/passwd')
+        subprocess.run(['git', 'add', '.'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'symlink'], cwd=self.root, check=True)
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
+        with self.assertRaises(ValueError):
+            build_bundle(self.root, commit, FILES)
+
+    def test_runtime_selection_ignores_uncommitted_and_non_runtime_files(self):
+        (self.root / 'code_health/uncommitted.py').write_text('ignored')
+        (self.root / 'code_health/notes.txt').write_text('ignored')
+        subprocess.run(['git', 'add', 'code_health/notes.txt'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'notes'], cwd=self.root, check=True)
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
+        self.assertEqual(runtime_files(self.root, commit), FILES)
+
+    def test_ignores_poisoned_git_path_and_inherited_git_directory(self):
+        fake_bin = self.root / 'bin'
+        fake_bin.mkdir()
+        marker = self.root / 'fake-git-called'
+        fake_git = fake_bin / 'git'
+        fake_git.write_text(f'#!/bin/sh\ntouch "{marker}"\nexit 93\n')
+        fake_git.chmod(0o755)
+        with patch.dict('os.environ', {'PATH': str(fake_bin), 'GIT_DIR': str(self.root / 'wrong')}):
+            data = build_bundle(self.root, self.commit, FILES)
+        self.assertFalse(marker.exists())
+        self.assertEqual(read_bundle(data, policy_commit=self.commit, allowed_files=FILES)[1]['code_health/cli.py'], b'committed')
