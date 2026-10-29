@@ -189,3 +189,55 @@ Run the verifier's tests with the pinned scanner installed:
 python -m pip install 'desloppify[full]==1.0'
 python -m unittest discover -s tests -v
 ```
+
+#### Versioned CI producer evidence
+
+The stable trusted launcher may generate `producer.json` after it has verified
+the immutable policy bundle and completed the scan:
+
+```sh
+python -m code_health.artifacts \
+  --repo /caller/checkout --base "$BASE_SHA" --head "$HEAD_SHA" \
+  --result /private/output/result.json \
+  --execution-evidence /private/verified-execution.json \
+  --output /private/output/producer.json
+```
+
+The execution-evidence file must live outside the caller checkout and contain
+the launcher's private, already verified `launcher` and `release` objects. The
+launcher object identifies the actual stable workflow and action. The release
+object separately identifies the selected immutable policy commit, bundle,
+release manifest, qualification workflow and fully hashed dependency lock.
+Those hashes must come from the trusted launcher's actual verification of the
+downloaded bytes; merely passing this module's shape checks does not authenticate
+an untrusted JSON file. The lock's bundle path is `code_health/requirements.lock`.
+
+Schema version 1, kind `agentsia.code-health.ci-producer`, binds the exact source
+commits/tree, regular Git manifest blob, raw manifest bytes, result bytes and
+GitHub run identity. Its registry is generated from every declared manifest area
+and unsupported-language gap, namespaced by repository ID/name. There is no fixed
+repository list or area enum. Source/result/config mismatches, unknown envelope
+fields, duplicate JSON keys, oversized inputs and candidate-checkout execution
+evidence are refused. Existing output files cannot be overwritten.
+
+The actual runtime is recorded as `runtime` with `pythonVersion`, `sysPlatform`,
+`machine` and `glibcVersion`. Generation requires Python 3.13 on Linux x86_64 or
+aarch64 with glibc >= 2.34, matching the dependency lock's supported platform
+resolution. Resolution and shape tests do not establish successful installation
+or end-to-end operation on a real Linux runner; that qualification remains
+required before activation.
+
+The trusted workflow attests the exact `producer.json` bytes, then uploads it
+with the exact `result.json` it references. Artifact ID and archive digest are
+obtained after upload, so they are not embedded in their own content. Every
+envelope has `collectorValidationRequired: true`: m3-max independently verifies
+the live run/attempt, artifact bytes/digests, certificate repository IDs, trusted
+signer workflow and immutable policy release before signing or publishing a
+point. A matching check display name, caller assertion or envelope alone never
+establishes that authority. The publishing signing key stays off CI.
+
+This producer slice binds the mechanical ratchet report and manifest projection.
+It does not invent the additional native scores/dimensions/findings needed for
+the richer dashboard, upload raw scanner state or activate a workflow. A later
+sanitised native projection and the versioned feed consumer must preserve the
+existing history while admitting new repository/area series.
