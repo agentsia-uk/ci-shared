@@ -134,8 +134,11 @@ ordinary PRs so a scope change cannot quietly reset a comparison.
 `policyRef` is checked against the action repository and SHA actually executing.
 `workflowRef` is checked in the actual caller workflow at GitHub's bound
 workflow commit, so a decoy candidate workflow cannot supply the pin. Results
-record those identities and hashes of the policy, verifier and repository
-configuration.
+record the executing action identity, the caller identity, the caller's
+declared shared-workflow ref and hashes of the policy, verifier and repository
+configuration. A caller declaration does not establish that branch protection
+requires the gate; adoption must verify live required contexts and their
+producer identities separately.
 
 The corresponding caller is unconditional and has no path or branch filters:
 

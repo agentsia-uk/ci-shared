@@ -130,7 +130,7 @@ def execution_provenance(repo, args, config):
         'actionRef': args.action_ref,
         'callerWorkflow': caller_path,
         'callerWorkflowSha': args.caller_sha,
-        'workflowRef': config['workflowRef'],
+        'callerDeclaredWorkflowRef': config['workflowRef'],
         'policySha256': hashlib.sha256(Path(__file__).with_name('policy.json').read_bytes()).hexdigest(),
         'verifierSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         'invocation': 'github-actions' if os.environ.get('GITHUB_ACTIONS') == 'true' else 'local',

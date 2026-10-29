@@ -81,6 +81,7 @@ class PolicyTests(unittest.TestCase):
             provenance = r.execution_provenance(Path('.'), args, config())
             self.assertEqual('a' * 40, provenance['actionRef'])
             self.assertEqual('c' * 40, provenance['callerWorkflowSha'])
+            self.assertEqual('b' * 40, provenance['callerDeclaredWorkflowRef'])
             self.assertEqual(['git', 'show', 'c' * 40 + ':.github/workflows/actual.yml'], command.call_args.args[0])
         args.action_ref = 'd' * 40
         with self.assertRaisesRegex(ValueError, 'executing action'):
