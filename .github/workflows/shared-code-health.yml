@@ -1,0 +1,66 @@
+name: Shared code health
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: JSON runner selector for the consumer's approved isolated CI pool. There is no hosted fallback.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  code-health:
+    name: Code health mechanical ratchet
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout candidate and baseline history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: code-health-source
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Bind exact comparison commits
+        id: commits
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          if 'pull_request' in event:
+              base = event['pull_request']['base']['sha']
+              head = os.environ['CANDIDATE_SHA']
+          elif 'merge_group' in event:
+              base = event['merge_group']['base_sha']
+              head = event['merge_group']['head_sha']
+          else:
+              raise SystemExit('Code health requires a pull_request or merge_group event')
+          if not all(re.fullmatch('[0-9a-f]{40}', sha) for sha in [base, head]):
+              raise SystemExit('Invalid comparison commit SHA')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'base={base}\nhead={head}\n')
+          PY
+      - name: Enforce the shared policy
+        uses: agentsia-uk/ci-shared/code_health@df210a1cf34f626cc5da0586271ae2310f615a38
+        with:
+          repository-path: ${{ github.workspace }}/code-health-source
+          base-sha: ${{ steps.commits.outputs.base }}
+          head-sha: ${{ steps.commits.outputs.head }}
+          output-path: ${{ runner.temp }}/code-health-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Retain sanitised comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-health-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/code-health-${{ github.run_id }}-${{ github.run_attempt }}/result.json
+          if-no-files-found: ignore

@@ -1,0 +1,47 @@
+name: Code health mechanical ratchet
+description: Full base/head project scans using the pinned organisation policy.
+inputs:
+  repository-path:
+    description: Path to a full-history caller checkout.
+    required: true
+  base-sha:
+    description: Exact baseline commit SHA.
+    required: true
+  head-sha:
+    description: Exact candidate commit SHA.
+    required: true
+  output-path:
+    description: Private scan work directory. Only result.json is safe to publish.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install the shared scanner pin
+      shell: bash
+      env:
+        POLICY_ROOT: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        version=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["POLICY_ROOT"])/"policy.json").read_text())["desloppifyVersion"])')
+        python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
+    - name: Compare full scans
+      shell: bash
+      env:
+        POLICY_ROOT: ${{ github.action_path }}
+        REPOSITORY_PATH: ${{ inputs.repository-path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+        EXECUTING_ACTION_REPOSITORY: ${{ github.action_repository }}
+        EXECUTING_ACTION_REF: ${{ github.action_ref }}
+        CALLER_REPOSITORY: ${{ github.repository }}
+        CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+        CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        CODE_HEALTH_GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python "${POLICY_ROOT}/cli.py" --repo "${REPOSITORY_PATH}" \
+          --base "${BASE_SHA}" --head "${HEAD_SHA}" --output "${OUTPUT_PATH}" \
+          --repository "${CALLER_REPOSITORY}" --action-repository "${EXECUTING_ACTION_REPOSITORY}" \
+          --action-ref "${EXECUTING_ACTION_REF}" --caller-ref "${CALLER_WORKFLOW_REF}" \
+          --caller-sha "${CALLER_WORKFLOW_SHA}"
