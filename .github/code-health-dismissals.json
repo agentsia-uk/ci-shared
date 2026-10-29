@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "area": "ci-shared-python",
+      "findingId": "dict_keys::code_health/artifacts.py::dead_write::expected::areas",
+      "findingSha256": "578243f2f425549be07584f01c896ac94d01990abf162c0e261cb991876ed8b7",
+      "sourceSha256": {
+        "code_health/artifacts.py": "6aa855764a50659722956c1e938e6c1ba90844e796d6cdac39091b6060daa7e5"
+      },
+      "status": "false_positive",
+      "toolVersion": "1.0",
+      "rationale": "The expected dictionary is consumed as a whole by registry == expected in validate_envelope. Its 'areas' key is essential to exact manifest projection validation; whole-dictionary equality reads every key/value. The detector only tracks individual subscript reads and misclassifies this aggregate comparison. Strict registry mutation tests cover the comparison.",
+      "attestation": "I have reviewed this exact finding against the source and tests, and I am not gaming the score by suppressing a real defect.",
+      "pullRequest": 19
+    },
+    {
+      "area": "ci-shared-python",
+      "findingId": "dict_keys::code_health/artifacts.py::dead_write::expected::manifestSha256",
+      "findingSha256": "cf577173a6dde0d704899f8a97e802069459794370600cee0ca0913b080a19cb",
+      "sourceSha256": {
+        "code_health/artifacts.py": "6aa855764a50659722956c1e938e6c1ba90844e796d6cdac39091b6060daa7e5"
+      },
+      "status": "false_positive",
+      "toolVersion": "1.0",
+      "rationale": "The expected dictionary is consumed as a whole by registry == expected in validate_envelope. Its 'manifestSha256' key is essential to exact manifest projection validation; whole-dictionary equality reads every key/value. The detector only tracks individual subscript reads and misclassifies this aggregate comparison. Strict registry mutation tests cover the comparison.",
+      "attestation": "I have reviewed this exact finding against the source and tests, and I am not gaming the score by suppressing a real defect.",
+      "pullRequest": 19
+    },
+    {
+      "area": "ci-shared-python",
+      "findingId": "dict_keys::code_health/artifacts.py::dead_write::expected::repository",
+      "findingSha256": "d8158999690193e6e7de084dedb56b93622dfbfe9bc3f1d4ee80d6f7ff2df60c",
+      "sourceSha256": {
+        "code_health/artifacts.py": "6aa855764a50659722956c1e938e6c1ba90844e796d6cdac39091b6060daa7e5"
+      },
+      "status": "false_positive",
+      "toolVersion": "1.0",
+      "rationale": "The expected dictionary is consumed as a whole by registry == expected in validate_envelope. Its 'repository' key is essential to exact manifest projection validation; whole-dictionary equality reads every key/value. The detector only tracks individual subscript reads and misclassifies this aggregate comparison. Strict registry mutation tests cover the comparison.",
+      "attestation": "I have reviewed this exact finding against the source and tests, and I am not gaming the score by suppressing a real defect.",
+      "pullRequest": 19
+    },
+    {
+      "area": "ci-shared-python",
+      "findingId": "dict_keys::code_health/artifacts.py::dead_write::expected::sourceCommitSha",
+      "findingSha256": "ed621f8ff16192f39d09fc82b78c9cad1639c710ef0d946e4bc961197690f409",
+      "sourceSha256": {
+        "code_health/artifacts.py": "6aa855764a50659722956c1e938e6c1ba90844e796d6cdac39091b6060daa7e5"
+      },
+      "status": "false_positive",
+      "toolVersion": "1.0",
+      "rationale": "The expected dictionary is consumed as a whole by registry == expected in validate_envelope. Its 'sourceCommitSha' key is essential to exact manifest projection validation; whole-dictionary equality reads every key/value. The detector only tracks individual subscript reads and misclassifies this aggregate comparison. Strict registry mutation tests cover the comparison.",
+      "attestation": "I have reviewed this exact finding against the source and tests, and I am not gaming the score by suppressing a real defect.",
+      "pullRequest": 19
+    },
+    {
+      "area": "ci-shared-python",
+      "findingId": "dict_keys::code_health/artifacts.py::dead_write::expected::unsupportedLanguages",
+      "findingSha256": "6542148671e77707104d33c785d02c4fdc1868822a4a6d854d2354be3f010a16",
+      "sourceSha256": {
+        "code_health/artifacts.py": "6aa855764a50659722956c1e938e6c1ba90844e796d6cdac39091b6060daa7e5"
+      },
+      "status": "false_positive",
+      "toolVersion": "1.0",
+      "rationale": "The expected dictionary is consumed as a whole by registry == expected in validate_envelope. Its 'unsupportedLanguages' key is essential to exact manifest projection validation; whole-dictionary equality reads every key/value. The detector only tracks individual subscript reads and misclassifies this aggregate comparison. Strict registry mutation tests cover the comparison.",
+      "attestation": "I have reviewed this exact finding against the source and tests, and I am not gaming the score by suppressing a real defect.",
+      "pullRequest": 19
+    },
+    {
+      "area": "ci-shared-python",
+      "findingId": "orphaned::code_health/artifacts.py",
+      "findingSha256": "2b6c981fdcd797eabe0aa278b96de85fe42a7f11f6aefe090968197dcc123512",
+      "sourceSha256": {
+        "code_health/artifacts.py": "6aa855764a50659722956c1e938e6c1ba90844e796d6cdac39091b6060daa7e5"
+      },
+      "status": "false_positive",
+      "toolVersion": "1.0",
+      "rationale": "This is the public standalone entrypoint documented as python -m code_health.artifacts. Its __main__ guard invokes main; the real subprocess --help smoke and standalone context/output tests execute that interface. A production Python importer is not required for a directly invoked CLI module, and the detector does not recognise this module entrypoint.",
+      "attestation": "I have reviewed this exact finding against the source and tests, and I am not gaming the score by suppressing a real defect.",
+      "pullRequest": 19
+    },
+    {
+      "area": "ci-shared-python",
+      "findingId": "smells::code_health/artifacts.py::magic_number",
+      "findingSha256": "9d410d781600cc664ffd25708e2abf48af6d58bcd40f0d33bebc3bd7f21eac7e",
+      "sourceSha256": {
+        "code_health/artifacts.py": "6aa855764a50659722956c1e938e6c1ba90844e796d6cdac39091b6060daa7e5"
+      },
+      "status": "false_positive",
+      "toolVersion": "1.0",
+      "rationale": "The four flagged lines define named MAX_MANIFEST_BYTES, MAX_RESULT_BYTES, MAX_EXECUTION_BYTES and MAX_ENVELOPE_BYTES constants. The 1024 factors express 1 MiB, 8 MiB, 64 KiB and 4 MiB limits; they are explicit bounded-input policy constants rather than unexplained values scattered through logic. Byte-limit rejection tests exercise their use.",
+      "attestation": "I have reviewed this exact finding against the source and tests, and I am not gaming the score by suppressing a real defect.",
+      "pullRequest": 19
+    }
+  ]
+}

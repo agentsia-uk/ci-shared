@@ -132,6 +132,8 @@ class ProducerTests(unittest.TestCase):
             a.current_runtime()
 
     def test_standalone_entry_writes_once_and_requires_github_context(self):
+        help_result = subprocess.run([a.sys.executable, '-m', 'code_health.artifacts', '--help'], cwd=Path(a.__file__).parents[1], check=True, capture_output=True, timeout=30)
+        self.assertIn(b'--execution-evidence', help_result.stdout)
         output = self.root / 'producer.json'
         argv = ['artifacts', '--repo', str(self.repo), '--base', self.commit, '--head', self.commit, '--result', str(self.result_path), '--execution-evidence', str(self.evidence_path), '--output', str(output)]
         env = {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY_ID': str(REPOSITORY['id']), 'GITHUB_REPOSITORY': REPOSITORY['fullName'], 'GITHUB_RUN_ID': str(RUN['id']), 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': RUN['ref']}
