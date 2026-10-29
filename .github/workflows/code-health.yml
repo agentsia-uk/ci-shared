@@ -1,0 +1,16 @@
+name: Code health
+
+on: [pull_request, merge_group]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  mechanical:
+    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@a1c704e7d4c118c650eb243907c50db40eadbbb1
+    with:
+      runs-on: '["ubuntu-latest"]'
+    permissions:
+      contents: read
+      pull-requests: read
