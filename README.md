@@ -124,6 +124,8 @@ Each path must be one coherent project. A nested project's path is excluded
 from its parent's scan automatically. Every tracked file with a supported
 language extension must belong to a matching language area. Unsupported
 language gaps may be listed as `{"language": "...", "rationale": "..."}`.
+Repositories containing only unsupported languages declare `areas: []` and
+their known gaps; they receive no invented score or source-language area.
 Each explicit exclusion requires `pattern`, `kind` and `rationale`; allowed
 classes are generated, vendored, fixtures, snapshots and build output.
 Arbitrary source exclusions are refused. Optional `strictTarget` and
@@ -162,8 +164,9 @@ pool, with no hosted fallback. It does not install application dependencies or
 explicitly launch application entrypoints. Detector tools may invoke compilers
 or load project tool configuration, so the caller's existing CI isolation is
 still the execution boundary. Application secrets are never passed to scans. The verifier and policy come from the frozen
-shared action rather than the candidate checkout. Scanner configuration is
-reconstructed with plugins and model runners disabled; checked-in local
+shared action rather than the candidate checkout. Snapshots materialise raw Git blobs directly, so export-ignore/export-subst
+attributes cannot omit or rewrite source. Escaping symlinks are refused.
+Scanner configuration is reconstructed with plugins and model runners disabled; checked-in local
 Desloppify state is ignored. Only the sanitised `result.json` is uploaded.
 Raw state and logs can contain source excerpts and must stay private.
 

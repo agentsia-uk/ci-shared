@@ -127,6 +127,13 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'web/hidden.py'):
             r.validate_language_coverage(['web/hidden.py'], areas)
 
+    def test_unsupported_only_repository_has_gaps_without_invented_areas(self):
+        c = dict(config(), areas=[], unsupportedLanguages=[{'language': 'yaml', 'rationale': 'workflow-only repository'}])
+        r.validate_config(c)
+        r.validate_language_coverage(['.github/workflows/policy.yml', 'README.md'], c['areas'])
+        with self.assertRaisesRegex(ValueError, 'outside declared'):
+            r.validate_language_coverage(['source.py'], c['areas'])
+
     def test_ordinary_pr_cannot_hide_existing_area_or_relax_rule(self):
         for mutate in [lambda c: c['areas'].clear(), lambda c: c['areas'][0].update(path='subset'), lambda c: c.update(strictTarget=89), lambda c: c.update(reviewMaxAgeDays=31)]:
             c = config()
@@ -182,6 +189,39 @@ class RatchetTests(unittest.TestCase):
             r.compare({'objective_score': 90}, state(), {'objective_score': 90}, broken, set(), {}, 'python')
         with self.assertRaises(ValueError):
             r.compare({'objective_score': 90}, state(), {'objective_score': 90}, {}, set(), {}, 'python')
+
+    def test_snapshot_uses_exact_blobs_despite_export_attributes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            repo = root / 'repo'
+            repo.mkdir()
+            git = lambda *args: subprocess.check_output(['git', *args], cwd=repo)
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            unsafe = b'def handle(value):\n    return eval(value)\n'
+            substitution = b'COMMIT = "$Format:%H$"\n'
+            (repo / 'unsafe.py').write_bytes(unsafe)
+            (repo / 'substitution.py').write_bytes(substitution)
+            (repo / '.gitattributes').write_text('unsafe.py export-ignore\nsubstitution.py export-subst\n')
+            (repo / 'run.sh').write_text('#!/bin/sh\ntrue\n')
+            (repo / 'run.sh').chmod(0o755)
+            (repo / 'internal.py').symlink_to('unsafe.py')
+            git('add', '.')
+            git('commit', '-qm', 'source')
+            sha = git('rev-parse', 'HEAD').decode().strip()
+            destination = root / 'snapshot'
+            r.snapshot(repo, sha, destination)
+            self.assertEqual(git('show', f'{sha}:unsafe.py'), (destination / 'unsafe.py').read_bytes())
+            self.assertEqual(substitution, (destination / 'substitution.py').read_bytes())
+            self.assertEqual(0o755, (destination / 'run.sh').stat().st_mode & 0o777)
+            self.assertTrue((destination / 'internal.py').is_symlink())
+            self.assertEqual(unsafe, (destination / 'internal.py').read_bytes())
+            (repo / 'escape').symlink_to('/etc')
+            git('add', '.')
+            git('commit', '-qm', 'escape')
+            with self.assertRaisesRegex(ValueError, 'symlink escapes'):
+                r.snapshot(repo, git('rev-parse', 'HEAD').decode().strip(), root / 'escaped')
 
     def test_changed_paths_include_both_rename_ends_and_deleted_files(self):
         with tempfile.TemporaryDirectory() as temporary:

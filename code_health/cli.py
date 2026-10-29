@@ -12,7 +12,6 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
-import tarfile
 import tempfile
 import urllib.parse
 import urllib.request
@@ -58,7 +57,7 @@ def validate_config(config):
     require(type(target) in {int, float} and math.isfinite(target) and POLICY['strictTarget'] <= target <= 100, 'strict target may only tighten the shared policy')
     require(type(age) is int and 1 <= age <= POLICY['review']['maxAgeDays'], 'review age may only tighten the shared policy')
     areas = config.get('areas')
-    require(isinstance(areas, list) and areas, 'at least one coherent project area is required')
+    require(isinstance(areas, list), 'areas must list the coherent projects')
     ids, paths = set(), set()
     for area in areas:
         require(isinstance(area, dict) and set(area) == {'id', 'language', 'path', 'exclusions'}, 'invalid area fields')
@@ -80,6 +79,7 @@ def validate_config(config):
     require(isinstance(gaps, list), 'unsupportedLanguages must be a list')
     for gap in gaps:
         require(isinstance(gap, dict) and set(gap) == {'language', 'rationale'} and gap['language'] not in LANGUAGES and gap['rationale'], 'known language gaps must be unsupported and explained')
+    require(areas or gaps, 'declare at least one supported area or an unsupported-language gap')
     return config
 
 
@@ -296,14 +296,57 @@ def compare(base_status, base_state, head_status, head_state, touched, renames, 
 
 
 def snapshot(repo, sha, destination):
-    archive_path = destination.parent / f'{destination.name}.tar'
-    with archive_path.open('wb') as archive:
-        subprocess.run(['git', 'archive', '--format=tar', sha], cwd=repo, stdout=archive, check=True, timeout=1800)
     destination.mkdir()
-    with tarfile.open(archive_path) as source:
-        members = [m for m in source.getmembers() if '.desloppify' not in PurePosixPath(m.name).parts]
-        source.extractall(destination, members=members, filter='data')
-    archive_path.unlink()
+    root = destination.resolve()
+    entries, links = [], []
+    tree = run(['git', 'ls-tree', '-rz', '--full-tree', sha], cwd=repo)
+    for record in tree.split(b'\0'):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b'\t', 1)
+        mode, kind, oid = metadata.split()
+        path = PurePosixPath(os.fsdecode(raw_path))
+        require(not path.is_absolute() and '..' not in path.parts, 'Git tree path escapes its snapshot')
+        if '.desloppify' in path.parts:
+            continue
+        if kind == b'commit' and mode == b'160000':
+            (destination / path).mkdir(parents=True, exist_ok=True)
+            continue
+        require(kind == b'blob' and mode in {b'100644', b'100755', b'120000'}, 'unsupported Git tree entry')
+        entries.append((mode, oid, path))
+    batch = destination.parent / f'{destination.name}.blobs'
+    with batch.open('wb') as output:
+        requests = b''.join(oid + b'\n' for _, oid, _ in entries)
+        subprocess.run(['git', 'cat-file', '--batch'], input=requests, cwd=repo, stdout=output, stderr=subprocess.PIPE, check=True, timeout=1800)
+    with batch.open('rb') as source:
+        for mode, oid, path in entries:
+            header = source.readline().split()
+            require(len(header) == 3 and header[:2] == [oid, b'blob'] and header[2].isdigit(), 'invalid Git blob response')
+            remaining = int(header[2])
+            target = destination / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            require(not target.exists() and not target.is_symlink(), 'colliding Git snapshot paths')
+            if mode == b'120000':
+                require(remaining <= 4096, 'snapshot symlink target is too long')
+                data = source.read(remaining)
+                require(len(data) == remaining, 'truncated Git symlink blob')
+                links.append((target, os.fsdecode(data)))
+            else:
+                with target.open('wb') as output:
+                    while remaining:
+                        data = source.read(min(remaining, 1024 * 1024))
+                        require(data, 'truncated Git blob')
+                        output.write(data)
+                        remaining -= len(data)
+                target.chmod(0o755 if mode == b'100755' else 0o644)
+            require(source.read(1) == b'\n', 'invalid Git blob delimiter')
+        require(not source.read(1), 'unexpected extra Git blob data')
+    batch.unlink()
+    # Create links last so blob writes never follow candidate-controlled links.
+    for target, link in links:
+        require(not Path(link).is_absolute() and (target.parent / link).resolve().is_relative_to(root), 'snapshot symlink escapes its root')
+        require(not target.exists() and not target.is_symlink(), 'colliding Git symlink path')
+        target.symlink_to(link)
 
 
 def scan(snapshot_root, area, output, areas):
