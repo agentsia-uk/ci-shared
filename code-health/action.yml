@@ -32,7 +32,16 @@ runs:
         BASE_SHA: ${{ inputs.base-sha }}
         HEAD_SHA: ${{ inputs.head-sha }}
         OUTPUT_PATH: ${{ inputs.output-path }}
+        EXECUTING_ACTION_REPOSITORY: ${{ github.action_repository }}
+        EXECUTING_ACTION_REF: ${{ github.action_ref }}
+        CALLER_REPOSITORY: ${{ github.repository }}
+        CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+        CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        CODE_HEALTH_GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         python "${POLICY_ROOT}/ratchet.py" --repo "${REPOSITORY_PATH}" \
-          --base "${BASE_SHA}" --head "${HEAD_SHA}" --output "${OUTPUT_PATH}"
+          --base "${BASE_SHA}" --head "${HEAD_SHA}" --output "${OUTPUT_PATH}" \
+          --repository "${CALLER_REPOSITORY}" --action-repository "${EXECUTING_ACTION_REPOSITORY}" \
+          --action-ref "${EXECUTING_ACTION_REF}" --caller-ref "${CALLER_WORKFLOW_REF}" \
+          --caller-sha "${CALLER_WORKFLOW_SHA}"

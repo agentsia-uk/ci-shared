@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.parse
+import urllib.request
 
 from desloppify.languages import available_langs, get_lang
 
@@ -45,9 +47,10 @@ def relative_path(value, *, pattern=False):
 
 def validate_config(config):
     require(isinstance(config, dict), 'code-health config must be an object')
-    require(set(config) <= {'schemaVersion', 'policyRef', 'strictTarget', 'reviewMaxAgeDays', 'areas', 'unsupportedLanguages'}, 'unknown code-health config field')
+    require(set(config) <= {'schemaVersion', 'policyRef', 'workflowRef', 'strictTarget', 'reviewMaxAgeDays', 'areas', 'unsupportedLanguages'}, 'unknown code-health config field')
     require(type(config.get('schemaVersion')) is int and config['schemaVersion'] == POLICY['schemaVersion'], 'unsupported policy schema')
-    require(re.fullmatch('[0-9a-f]{40}', str(config.get('policyRef', ''))), 'policyRef must be an immutable 40-character SHA')
+    for field in ['policyRef', 'workflowRef']:
+        require(isinstance(config.get(field), str) and re.fullmatch('[0-9a-f]{40}', config[field]), f'{field} must be an immutable 40-character SHA')
     target = config.get('strictTarget', POLICY['strictTarget'])
     age = config.get('reviewMaxAgeDays', POLICY['review']['maxAgeDays'])
     require(type(target) in {int, float} and math.isfinite(target) and POLICY['strictTarget'] <= target <= 100, 'strict target may only tighten the shared policy')
@@ -78,9 +81,10 @@ def validate_config(config):
     return config
 
 
-def validate_transition(base, head):
+def validate_transition(base, head, *, upgrade=False):
     if base is None:
         return
+    require(head['policyRef'] == base['policyRef'] or upgrade, 'policy changes require a dedicated authorized upgrade PR')
     require(head.get('strictTarget', 90) >= base.get('strictTarget', 90), 'a repository cannot lower its strict target')
     require(head.get('reviewMaxAgeDays', 30) <= base.get('reviewMaxAgeDays', 30), 'a repository cannot relax its review cadence')
     old = {a['id']: a for a in base['areas']}
@@ -89,32 +93,106 @@ def validate_transition(base, head):
         require(new.get(key) == area, 'existing scan areas and exclusions cannot change in an ordinary PR')
 
 
-def validate_workflow_pin(repo, sha, files, policy_ref):
+def validate_workflow_pin(repo, sha, workflow_path, workflow_ref):
     import yaml
 
-    expected = f'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@{policy_ref}'
+    relative_path(workflow_path)
+    require(workflow_path.startswith('.github/workflows/') and workflow_path.endswith(('.yml', '.yaml')), 'caller workflow path is invalid')
+    expected = f'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@{workflow_ref}'
+    workflow = yaml.load(run(['git', 'show', f'{sha}:{workflow_path}'], cwd=repo), Loader=yaml.BaseLoader)
+    require(isinstance(workflow, dict) and isinstance(workflow.get('jobs'), dict), 'caller workflow has no jobs')
     found = False
-    for file in files:
-        if not file.startswith('.github/workflows/') or not file.endswith(('.yml', '.yaml')):
+    for job in workflow['jobs'].values():
+        if not isinstance(job, dict) or not str(job.get('uses', '')).startswith('agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@'):
             continue
-        workflow = yaml.load(run(['git', 'show', f'{sha}:{file}'], cwd=repo), Loader=yaml.BaseLoader)
-        if not isinstance(workflow, dict):
-            continue
-        jobs = workflow.get('jobs', {})
-        if not isinstance(jobs, dict):
-            continue
-        for job in jobs.values():
-            if not isinstance(job, dict) or not str(job.get('uses', '')).startswith('agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@'):
+        require(job['uses'] == expected, 'actual caller workflow does not match workflowRef')
+        require('if' not in job and job.get('continue-on-error', 'false') == 'false', 'the code-health gate may not be conditional or advisory')
+        events = workflow.get('on', {})
+        require(isinstance(events, (dict, list)) and 'pull_request' in events and 'merge_group' in events, 'code-health caller must run on pull_request and merge_group')
+        if isinstance(events, dict):
+            for event in ['pull_request', 'merge_group']:
+                require(events[event] in ('', None) or events[event] == {}, 'code-health caller may not filter PR or merge-group events')
+        found = True
+    require(found, 'actual caller has no unconditional SHA-pinned shared code-health workflow')
+
+
+def execution_provenance(repo, args, config):
+    require(args.action_repository == 'agentsia-uk/ci-shared', 'policy action is not from the canonical repository')
+    require(re.fullmatch('[0-9a-f]{40}', args.action_ref or ''), 'executing action must use a full SHA pin')
+    require(args.action_ref == config['policyRef'], 'policyRef does not match the executing action')
+    require(re.fullmatch('[0-9a-f]{40}', args.caller_sha or ''), 'caller workflow must be bound to its actual commit')
+    prefix = args.repository + '/'
+    require(args.caller_ref.startswith(prefix) and '@' in args.caller_ref, 'caller workflow does not belong to this repository')
+    caller_path = args.caller_ref[len(prefix):].split('@', 1)[0]
+    validate_workflow_pin(repo, args.caller_sha, caller_path, config['workflowRef'])
+    return {
+        'actionRepository': args.action_repository,
+        'actionRef': args.action_ref,
+        'callerWorkflow': caller_path,
+        'callerWorkflowSha': args.caller_sha,
+        'workflowRef': config['workflowRef'],
+        'policySha256': hashlib.sha256(Path(__file__).with_name('policy.json').read_bytes()).hexdigest(),
+        'verifierSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        'invocation': 'github-actions' if os.environ.get('GITHUB_ACTIONS') == 'true' else 'local',
+    }
+
+
+def authorized_upgrade(event, repository, touched):
+    pr = event.get('pull_request', {})
+    return (pr.get('user', {}).get('login') == 'github-actions[bot]'
+            and pr.get('head', {}).get('ref', '').startswith('automation/code-health-upgrade-')
+            and pr.get('head', {}).get('repo', {}).get('full_name') == repository
+            and pr.get('base', {}).get('repo', {}).get('full_name') == repository
+            and any(label.get('name') == 'code-health-upgrade' for label in pr.get('labels', []))
+            and all(path == CONFIG or path.startswith('.github/workflows/') for path in touched))
+
+
+def upgrade_evidence(event, args, touched):
+    if authorized_upgrade(event, args.repository, touched):
+        pr = event['pull_request']
+        pin = json.loads(run(['git', 'show', f"{pr['head']['sha']}:{CONFIG}"], cwd=args.repo)).get('policyRef')
+        if pin == args.action_ref:
+            return {'pullRequest': pr['number'], 'headSha': pr['head']['sha']}
+    if 'merge_group' not in event:
+        return None
+    token = os.environ.get('CODE_HEALTH_GITHUB_TOKEN')
+    require(token, 'a queued policy upgrade requires read-only PR metadata')
+    branch = event['merge_group']['base_ref'].removeprefix('refs/heads/')
+    for page in range(1, 101):
+        query = urllib.parse.urlencode({'state': 'open', 'base': branch, 'per_page': 100, 'page': page})
+        request = urllib.request.Request(f'https://api.github.com/repos/{args.repository}/pulls?{query}', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            prs = json.load(response)
+        require(isinstance(prs, list), 'invalid upgrade PR metadata')
+        for pr in prs:
+            if not authorized_upgrade({'pull_request': pr}, args.repository, {CONFIG}):
                 continue
-            require(job['uses'] == expected, 'caller workflow does not match policyRef')
-            require('if' not in job and job.get('continue-on-error', 'false') == 'false', 'the code-health gate may not be conditional or advisory')
-            events = workflow.get('on', {})
-            require(isinstance(events, (dict, list)) and 'pull_request' in events and 'merge_group' in events, 'code-health caller must run on pull_request and merge_group')
-            if isinstance(events, dict):
-                for event in ['pull_request', 'merge_group']:
-                    require(events[event] in ('', None) or events[event] == {}, 'code-health caller may not filter PR or merge-group events')
-            found = True
-    require(found, 'no unconditional SHA-pinned shared code-health workflow caller')
+            sha = pr['head']['sha']
+            require(re.fullmatch('[0-9a-f]{40}', sha), 'invalid upgrade head SHA')
+            contained = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            require(contained.returncode in {0, 1, 128}, 'could not verify queued upgrade ancestry')
+            if contained.returncode:
+                continue
+            ancestor = run(['git', 'merge-base', pr['base']['sha'], sha], cwd=args.repo).decode().strip()
+            paths, _ = changed_paths(args.repo, ancestor, sha)
+            pin = json.loads(run(['git', 'show', f'{sha}:{CONFIG}'], cwd=args.repo)).get('policyRef')
+            if pin == args.action_ref and authorized_upgrade({'pull_request': pr}, args.repository, paths):
+                return {'pullRequest': pr['number'], 'headSha': sha}
+        if len(prs) < 100:
+            return None
+    raise ValueError('upgrade PR metadata exceeded the bounded page limit')
+
+
+def area_has_source(files, area, areas):
+    extensions = set(get_lang(area['language']).extensions)
+    for file in files:
+        path = PurePosixPath(file)
+        if path.suffix not in extensions or not (area['path'] == '.' or path.is_relative_to(area['path'])):
+            continue
+        nested = any(other['path'] != area['path'] and PurePosixPath(other['path']).is_relative_to(area['path']) and path.is_relative_to(other['path']) for other in areas)
+        if not nested:
+            return True
+    return False
 
 
 def validate_language_coverage(files, areas):
@@ -180,22 +258,30 @@ def fingerprint(finding, renames):
     return finding['detector'], renames.get(finding['file'], finding['file']), tuple(renames.get(part, part) for part in finding['id'].split('::'))
 
 
+def objective_score(status):
+    score = status.get('objective_score')
+    require(type(score) in {float, int} and math.isfinite(score) and 0 <= score <= 100, 'missing or invalid objective score')
+    return score
+
+
+def detector_coverage(state, language):
+    record = state.get('scan_coverage', {}).get(language)
+    require(isinstance(record, dict) and record.get('status') in {'full', 'reduced'} and isinstance(record.get('detectors'), dict), 'missing detector coverage')
+    return {k: (v.get('status'), v.get('confidence')) for k, v in record['detectors'].items()}
+
+
 def compare(base_status, base_state, head_status, head_state, touched, renames, language):
     errors = []
-    scores = []
-    for status in [base_status, head_status]:
-        score = status.get('objective_score')
-        require(type(score) in {float, int} and math.isfinite(score) and 0 <= score <= 100, 'missing or invalid objective score')
-        scores.append(score)
-    if scores[1] < scores[0]:
-        errors.append(f'objective score decreased: {scores[0]} -> {scores[1]}')
-    coverage = []
-    for state in [base_state, head_state]:
-        record = state.get('scan_coverage', {}).get(language)
-        require(isinstance(record, dict) and record.get('status') in {'full', 'reduced'} and isinstance(record.get('detectors'), dict), 'missing detector coverage')
-        coverage.append({k: (v.get('status'), v.get('confidence')) for k, v in record['detectors'].items()})
-    require(coverage[0] == coverage[1], 'detector coverage changed between scans; scores are not comparable')
-    before = Counter(fingerprint(f, renames) for f in mechanical_findings(base_state))
+    score_after = objective_score(head_status)
+    coverage_after = detector_coverage(head_state, language)
+    if base_status is None and base_state is None:
+        score_before, before = None, Counter()
+    else:
+        score_before = objective_score(base_status)
+        require(detector_coverage(base_state, language) == coverage_after, 'detector coverage changed between scans; scores are not comparable')
+        before = Counter(fingerprint(f, renames) for f in mechanical_findings(base_state))
+        if score_after < score_before:
+            errors.append(f'objective score decreased: {score_before} -> {score_after}')
     after = mechanical_findings(head_state)
     introduced = Counter()
     for finding in after:
@@ -205,7 +291,7 @@ def compare(base_status, base_state, head_status, head_state, touched, renames, 
                 errors.append(f'T{finding["tier"]} remains in touched path: {finding["file"]} ({finding["detector"]})')
     for key, count in (introduced - before).items():
         errors.append(f'{count} new finding(s) in touched path: {key[1]} ({key[0]})')
-    return {'objectiveBefore': scores[0], 'objectiveAfter': scores[1], 'coverage': head_state['scan_coverage'][language]['status'], 'errors': errors}
+    return {'objectiveBefore': score_before, 'objectiveAfter': score_after, 'baselineKind': 'existing-area' if score_before is not None else 'new-area', 'coverage': head_state['scan_coverage'][language]['status'], 'errors': errors}
 
 
 def snapshot(repo, sha, destination):
@@ -253,22 +339,33 @@ def main():
     parser.add_argument('--base', required=True)
     parser.add_argument('--head', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--repository', required=True)
+    parser.add_argument('--action-repository', required=True)
+    parser.add_argument('--action-ref', required=True)
+    parser.add_argument('--caller-ref', required=True)
+    parser.add_argument('--caller-sha', required=True)
     args = parser.parse_args()
     require(re.fullmatch('[0-9a-f]{40}', args.base) and re.fullmatch('[0-9a-f]{40}', args.head), 'base and head must be full commit SHAs')
     require(version('desloppify') == POLICY['desloppifyVersion'], 'installed scanner version differs from the shared pin')
     args.output = args.output.resolve()
+    require(re.fullmatch(r'agentsia-uk/[A-Za-z0-9_.-]+', args.repository), 'repository must be an agentsia-uk slug')
     repo = args.repo.resolve()
+    args.repo = repo
     for sha in [args.base, args.head]:
         run(['git', 'rev-parse', '--verify', f'{sha}^{{commit}}'], cwd=repo)
     base_bytes = subprocess.run(['git', 'show', f'{args.base}:{CONFIG}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     require(base_bytes.returncode in {0, 128}, 'could not read base config')
     base = validate_config(json.loads(base_bytes.stdout)) if base_bytes.returncode == 0 else None
     head = validate_config(json.loads(run(['git', 'show', f'{args.head}:{CONFIG}'], cwd=repo)))
-    validate_transition(base, head)
-    files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.head], cwd=repo).decode().rstrip('\0').split('\0')
-    validate_workflow_pin(repo, args.head, files, head['policyRef'])
-    validate_language_coverage(files, head['areas'])
     touched, renames = changed_paths(repo, args.base, args.head)
+    event_path = os.environ.get('GITHUB_EVENT_PATH')
+    event = read_json(Path(event_path)) if event_path else {}
+    evidence = upgrade_evidence(event, args, touched) if base is not None and base['policyRef'] != head['policyRef'] else None
+    validate_transition(base, head, upgrade=evidence is not None)
+    provenance = execution_provenance(repo, args, head)
+    files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.head], cwd=repo).decode().rstrip('\0').split('\0')
+    base_files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.base], cwd=repo).decode().rstrip('\0').split('\0')
+    validate_language_coverage(files, head['areas'])
     args.output.mkdir(parents=True, exist_ok=True)
     results = []
     with tempfile.TemporaryDirectory(prefix='code-health-') as temporary:
@@ -276,11 +373,22 @@ def main():
         for name, sha in [('base', args.base), ('head', args.head)]:
             snapshot(repo, sha, root / name)
         for area in head['areas']:
-            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas'])
+            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas']) if area_has_source(base_files, area, head['areas']) else (None, None)
             after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'])
             result = compare(*before, *after, touched, renames, area['language'])
             results.append({'area': area['id'], **result})
-    report = {'schemaVersion': 1, 'base': args.base, 'head': args.head, 'desloppifyVersion': POLICY['desloppifyVersion'], 'policyRef': head['policyRef'], 'configSha256': hashlib.sha256(json.dumps(head, sort_keys=True).encode()).hexdigest(), 'areas': results, 'unsupportedLanguages': head.get('unsupportedLanguages', [])}
+    report = {
+        'schemaVersion': 1,
+        'base': args.base,
+        'head': args.head,
+        'desloppifyVersion': POLICY['desloppifyVersion'],
+        'provenance': provenance,
+        'policyChanged': base is not None and base['policyRef'] != head['policyRef'],
+        'upgradeEvidence': evidence,
+        'configSha256': hashlib.sha256(json.dumps(head, sort_keys=True).encode()).hexdigest(),
+        'areas': results,
+        'unsupportedLanguages': head.get('unsupportedLanguages', []),
+    }
     (args.output / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
     return int(any(r['errors'] for r in results))

@@ -4,6 +4,7 @@ import io
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import tempfile
 import unittest
@@ -16,7 +17,7 @@ spec.loader.exec_module(r)
 
 
 def config():
-    return {'schemaVersion': 1, 'policyRef': 'a' * 40, 'areas': [{'id': 'app-python', 'language': 'python', 'path': '.', 'exclusions': []}]}
+    return {'schemaVersion': 1, 'policyRef': 'a' * 40, 'workflowRef': 'b' * 40, 'areas': [{'id': 'app-python', 'language': 'python', 'path': '.', 'exclusions': []}]}
 
 
 def finding(path='src/a.py', tier=3, detector='smells', summary='same defect', **extra):
@@ -64,14 +65,53 @@ class PolicyTests(unittest.TestCase):
 
     def test_caller_is_sha_pinned_unconditional_and_runs_for_all_prs(self):
         shared = 'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@'
-        valid = 'on: [pull_request, merge_group]\njobs:\n  health:\n    uses: ' + shared + 'a' * 40 + '\n'
-        files = ['.github/workflows/ci.yml']
+        valid = 'on: [pull_request, merge_group]\njobs:\n  health:\n    uses: ' + shared + 'b' * 40 + '\n'
+        workflow_path = '.github/workflows/ci.yml'
         with patch.object(r, 'run', return_value=valid.encode()):
-            r.validate_workflow_pin(Path('.'), 'a' * 40, files, 'a' * 40)
-        invalid = [valid.replace('a' * 40, 'main'), valid.replace('    uses:', '    if: false\n    uses:'), valid.replace('[pull_request, merge_group]', '[push]'), valid.replace('on: [pull_request, merge_group]', 'on:\n  pull_request:\n    paths: [src/**]\n  merge_group:')]
+            r.validate_workflow_pin(Path('.'), 'a' * 40, workflow_path, 'b' * 40)
+        invalid = [valid.replace('b' * 40, 'main'), valid.replace('    uses:', '    if: false\n    uses:'), valid.replace('[pull_request, merge_group]', '[push]'), valid.replace('on: [pull_request, merge_group]', 'on:\n  pull_request:\n    paths: [src/**]\n  merge_group:')]
         for text in invalid:
             with self.subTest(text=text), patch.object(r, 'run', return_value=text.encode()), self.assertRaises(ValueError):
-                r.validate_workflow_pin(Path('.'), 'a' * 40, files, 'a' * 40)
+                r.validate_workflow_pin(Path('.'), 'a' * 40, workflow_path, 'b' * 40)
+
+    def test_policy_provenance_is_bound_to_actual_action_and_caller(self):
+        args = SimpleNamespace(action_repository='agentsia-uk/ci-shared', action_ref='a' * 40, caller_sha='c' * 40, caller_ref='agentsia-uk/example/.github/workflows/actual.yml@refs/pull/1/merge', repository='agentsia-uk/example')
+        text = ('on: [pull_request, merge_group]\njobs:\n  health:\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n').encode()
+        with patch.object(r, 'run', return_value=text) as command:
+            provenance = r.execution_provenance(Path('.'), args, config())
+            self.assertEqual('a' * 40, provenance['actionRef'])
+            self.assertEqual('c' * 40, provenance['callerWorkflowSha'])
+            self.assertEqual(['git', 'show', 'c' * 40 + ':.github/workflows/actual.yml'], command.call_args.args[0])
+        args.action_ref = 'd' * 40
+        with self.assertRaisesRegex(ValueError, 'executing action'):
+            r.execution_provenance(Path('.'), args, config())
+        args.action_ref = 'a' * 40
+        with patch.object(r, 'run', return_value=b'on: [pull_request, merge_group]\njobs: {other: {runs-on: linux}}'), self.assertRaisesRegex(ValueError, 'actual caller'):
+            r.execution_provenance(Path('.'), args, config())
+
+    def test_policy_pin_change_requires_a_dedicated_upgrade(self):
+        moved = dict(config(), policyRef='d' * 40)
+        with self.assertRaisesRegex(ValueError, 'dedicated'):
+            r.validate_transition(config(), moved)
+        r.validate_transition(config(), moved, upgrade=True)
+        pr = {'number': 1, 'user': {'login': 'github-actions[bot]'}, 'head': {'ref': 'automation/code-health-upgrade-1', 'sha': 'd' * 40, 'repo': {'full_name': 'agentsia-uk/example'}}, 'base': {'sha': 'e' * 40, 'repo': {'full_name': 'agentsia-uk/example'}}, 'labels': [{'name': 'code-health-upgrade'}]}
+        self.assertTrue(r.authorized_upgrade({'pull_request': pr}, 'agentsia-uk/example', {r.CONFIG}))
+        self.assertFalse(r.authorized_upgrade({'pull_request': pr}, 'agentsia-uk/example', {'src/app.py'}))
+        for mutate in [lambda p: p['user'].update(login='human'), lambda p: p['labels'].clear(), lambda p: p['head']['repo'].update(full_name='outside/fork')]:
+            changed = copy.deepcopy(pr)
+            mutate(changed)
+            self.assertFalse(r.authorized_upgrade({'pull_request': changed}, 'agentsia-uk/example', {r.CONFIG}))
+
+    def test_queued_upgrade_uses_live_pr_metadata_and_immutable_ancestry(self):
+        pr = {'number': 1, 'user': {'login': 'github-actions[bot]'}, 'head': {'ref': 'automation/code-health-upgrade-1', 'sha': 'd' * 40, 'repo': {'full_name': 'agentsia-uk/example'}}, 'base': {'sha': 'e' * 40, 'repo': {'full_name': 'agentsia-uk/example'}}, 'labels': [{'name': 'code-health-upgrade'}]}
+        event = {'merge_group': {'base_ref': 'refs/heads/main'}}
+        args = SimpleNamespace(repository='agentsia-uk/example', repo=Path('.'), head='f' * 40, action_ref='a' * 40)
+        def response(*_args, **_kwargs):
+            return contextlib.closing(io.BytesIO(json.dumps([pr]).encode()))
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', side_effect=[b'e' * 40, json.dumps({'policyRef': 'a' * 40}).encode()]):
+            self.assertEqual({'pullRequest': 1, 'headSha': 'd' * 40}, r.upgrade_evidence(event, args, {'src/app.py', r.CONFIG}))
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
+            self.assertIsNone(r.upgrade_evidence(event, args, {r.CONFIG}))
 
     def test_every_supported_source_language_requires_an_area(self):
         r.validate_language_coverage(['src/a.py', 'README.md'], config()['areas'])
@@ -168,7 +208,7 @@ class RatchetTests(unittest.TestCase):
             git('config', 'user.email', 'test@example.invalid')
             (repo / '.github/workflows').mkdir(parents=True)
             (repo / '.github/code-health.json').write_text(json.dumps(config()))
-            (repo / '.github/workflows/health.yml').write_text('on: [pull_request, merge_group]\njobs:\n  health:\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'a' * 40 + '\n')
+            (repo / '.github/workflows/health.yml').write_text('on: [pull_request, merge_group]\njobs:\n  health:\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n')
             (repo / '.desloppify').mkdir()
             (repo / '.desloppify/config.json').write_text('{"ignore": ["*"], "trust_plugins": true}')
             (repo / 'service.py').write_text('def handle(value):\n    return str(value)\n')
@@ -180,7 +220,7 @@ class RatchetTests(unittest.TestCase):
             git('commit', '-qm', 'after')
             head = git('rev-parse', 'HEAD')
             output = root / 'result'
-            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output)]
+            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head]
             with patch.object(r.sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(1, r.main())
             report = json.loads((output / 'result.json').read_text())
@@ -189,6 +229,22 @@ class RatchetTests(unittest.TestCase):
             self.assertTrue(report['areas'][0]['errors'])
             self.assertNotIn('eval(', json.dumps(report))
             self.assertEqual(r.POLICY['desloppifyVersion'], report['desloppifyVersion'])
+
+    def test_new_area_has_no_fabricated_baseline_score(self):
+        area = dict(config()['areas'][0], path='new-project')
+        self.assertFalse(r.area_has_source(['README.md'], area, [area]))
+        self.assertTrue(r.area_has_source(['new-project/service.py'], area, [area]))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / 'new-project').mkdir()
+            (root / 'new-project/service.py').write_text('def handle(value):\n    return str(value)\n')
+            status, scanned = r.scan(root, area, root / 'result', [area])
+            result = r.compare(None, None, status, scanned, {'new-project/service.py'}, {}, 'python')
+            self.assertIsNone(result['objectiveBefore'])
+            self.assertEqual('new-area', result['baselineKind'])
+            self.assertEqual([], result['errors'])
+            unsafe = state([finding('new-project/service.py', tier=2)])
+            self.assertTrue(r.compare(None, None, {'objective_score': 95}, unsafe, {'new-project/service.py'}, {}, 'python')['errors'])
 
     def test_actual_scanner_rejects_new_security_defect(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -220,7 +276,7 @@ class RatchetTests(unittest.TestCase):
             root = Path(temporary) / 'repo'
             root.mkdir()
             (root / 'training').mkdir()
-            with patch.object(r, 'run', side_effect=fake_run), patch.dict(r.os.environ, {'GH_TOKEN': 'do-not-forward', 'OPENAI_API_KEY': 'do-not-forward'}):
+            with patch.object(r, 'run', side_effect=fake_run), patch.dict(r.os.environ, {'GH_TOKEN': 'do-not-forward', 'OPENAI_API_KEY': 'do-not-forward', 'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}):
                 r.scan(root, config()['areas'][0], Path(temporary) / 'output', [*config()['areas'], {'path': 'training'}])
             scanner_config = json.loads((root / '.desloppify/config.json').read_text())
             self.assertFalse(scanner_config['trust_plugins'])
@@ -230,6 +286,7 @@ class RatchetTests(unittest.TestCase):
             for _, env in calls:
                 self.assertNotIn('GH_TOKEN', env)
                 self.assertNotIn('OPENAI_API_KEY', env)
+                self.assertNotIn('CODE_HEALTH_GITHUB_TOKEN', env)
 
 
 if __name__ == '__main__':

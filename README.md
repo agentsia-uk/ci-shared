@@ -99,7 +99,10 @@ scans with the same pinned scanner. It refuses an objective-score decrease,
 new mechanical findings in touched files, and remaining T1/T2 findings in
 those files. A cross-file finding counts when any related file is touched.
 Git renames preserve the identity of inherited lower-priority findings.
-Changed detector coverage fails closed. Existing reduced coverage is reported
+Changed detector coverage fails closed. A genuinely new project/language area
+records `objectiveBefore: null` and `baselineKind: new-area`; the candidate is
+scanned and its new touched findings still fail, without inventing a previous
+score. Existing reduced coverage is reported
 explicitly and never described as a complete detector run.
 
 A consumer commits `.github/code-health.json`:
@@ -107,7 +110,8 @@ A consumer commits `.github/code-health.json`:
 ```json
 {
   "schemaVersion": 1,
-  "policyRef": "<40-character shared workflow commit SHA>",
+  "policyRef": "<40-character shared action commit SHA>",
+  "workflowRef": "<40-character shared workflow commit SHA>",
   "areas": [
     {"id": "app-typescript", "language": "typescript", "path": ".", "exclusions": []},
     {"id": "training-python", "language": "python", "path": "training", "exclusions": []}
@@ -127,19 +131,27 @@ Arbitrary source exclusions are refused. Optional `strictTarget` and
 previous values. Existing area definitions and exclusions are immutable in
 ordinary PRs so a scope change cannot quietly reset a comparison.
 
+`policyRef` is checked against the action repository and SHA actually executing.
+`workflowRef` is checked in the actual caller workflow at GitHub's bound
+workflow commit, so a decoy candidate workflow cannot supply the pin. Results
+record those identities and hashes of the policy, verifier and repository
+configuration.
+
 The corresponding caller is unconditional and has no path or branch filters:
 
 ```yaml
 on: [pull_request, merge_group]
 permissions:
   contents: read
+  pull-requests: read
 jobs:
   code-health:
-    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@<same-40-character-SHA>
+    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@<workflowRef>
     with:
       runs-on: '<JSON selector for the repository-approved isolated CI pool>'
     permissions:
       contents: read
+      pull-requests: read
 ```
 
 The shared workflow requires the consumer's existing approved isolated Linux CI
@@ -157,8 +169,13 @@ It does **not** activate an organisation ruleset, onboard other repositories,
 schedule monthly reviews, create weekly upgrade PRs, publish points to the
 Code Health dashboard, or import recorded finding dismissals. Those consumers
 and automation must be delivered separately. Weekly tool upgrades, deliberate
-scope migrations and their calibration records need a dedicated reviewed
-upgrade path; this release does not silently rebaseline them.
+scope migrations and their calibration records still need a dedicated
+reviewed migration path. Scanner-policy pin changes already require a
+same-repository PR authored by `github-actions[bot]`, with an
+`automation/code-health-upgrade-` branch and `code-health-upgrade` label,
+changing only the manifest/workflows. Queued upgrades are independently
+matched to live PR metadata, exact ancestry and the pin carried by that PR.
+This release does not create those upgrade PRs or alter live required checks.
 
 Run the verifier's tests with the pinned scanner installed:
 
