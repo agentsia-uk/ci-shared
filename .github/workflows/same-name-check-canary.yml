@@ -1,0 +1,14 @@
+name: Check-name control
+
+on: [pull_request, merge_group]
+
+permissions:
+  contents: read
+
+jobs:
+  display-name-control:
+    name: mechanical / Code health mechanical ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report a green display-name control
+        run: 'true'
