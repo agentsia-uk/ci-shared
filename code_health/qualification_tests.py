@@ -1,6 +1,7 @@
 """Run the independently pinned qualification inventory and record completion."""
 import argparse
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -21,11 +22,22 @@ def test_ids(suite):
 
 
 def run_qualification(test_dir: str, receipt: Path, expected_count: int, expected_ids_sha256: str,
-                      expected_file_sha256: str) -> None:
+                      expected_file_sha256: str, expected_cli_sha256: str | None = None) -> None:
     test_file = Path(test_dir) / 'test_code_health.py'
     if hashlib.sha256(test_file.read_bytes()).hexdigest() != expected_file_sha256:
         raise ValueError('qualification test bytes differ from their trusted pin')
     sys.path.insert(0, str(Path.cwd()))
+    cli_path = Path.cwd() / 'code_health/cli.py'
+    if expected_cli_sha256 is not None:
+        if hashlib.sha256(cli_path.read_bytes()).hexdigest() != expected_cli_sha256:
+            raise ValueError('qualification policy bytes differ from the bundle')
+        package = importlib.import_module('code_health')
+        package_paths = getattr(package, '__path__', ())
+        if {Path(path).resolve() for path in package_paths} != {cli_path.parent.resolve()}:
+            raise ValueError('qualification policy package paths are not isolated')
+        cli = importlib.import_module('code_health.cli')
+        if Path(cli.__file__).resolve() != cli_path.resolve():
+            raise ValueError('qualification imported a different policy module')
     suite = unittest.defaultTestLoader.discover(test_dir, pattern='test_code_health.py')
     ids = sorted(test_ids(suite))
     digest = hashlib.sha256(('\n'.join(ids) + '\n').encode()).hexdigest()
@@ -33,9 +45,11 @@ def run_qualification(test_dir: str, receipt: Path, expected_count: int, expecte
         raise ValueError('qualification test inventory differs from its trusted pin')
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if (not result.wasSuccessful() or result.testsRun != expected_count or result.skipped or result.expectedFailures or
-            hashlib.sha256(test_file.read_bytes()).hexdigest() != expected_file_sha256):
+            hashlib.sha256(test_file.read_bytes()).hexdigest() != expected_file_sha256 or
+            (expected_cli_sha256 is not None and hashlib.sha256(cli_path.read_bytes()).hexdigest() != expected_cli_sha256)):
         raise ValueError('qualification tests did not all complete successfully')
-    payload = json.dumps({'testsRun': result.testsRun, 'testIdsSha256': digest}, sort_keys=True).encode() + b'\n'
+    payload = json.dumps({'testsRun': result.testsRun, 'testIdsSha256': digest,
+                          'policyCliSha256': expected_cli_sha256}, sort_keys=True).encode() + b'\n'
     fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, 'wb') as output:
@@ -51,8 +65,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test-directory', required=True)
     parser.add_argument('--receipt', type=Path, required=True)
+    parser.add_argument('--expected-cli-sha256', required=True)
     args = parser.parse_args()
-    run_qualification(args.test_directory, args.receipt, EXPECTED_COUNT, EXPECTED_IDS_SHA256, EXPECTED_TEST_FILE_SHA256)
+    run_qualification(args.test_directory, args.receipt, EXPECTED_COUNT, EXPECTED_IDS_SHA256,
+                      EXPECTED_TEST_FILE_SHA256, args.expected_cli_sha256)
 
 
 if __name__ == '__main__':

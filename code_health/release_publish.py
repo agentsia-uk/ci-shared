@@ -95,6 +95,12 @@ def publish(asset: Path, policy_commit: str) -> None:
         if not isinstance(settings, dict) or settings.get('enabled') is not True:
             raise ValueError('immutable releases are not enabled')
 
+    def require_current_main() -> None:
+        branch = api('branches/main')
+        commit = branch.get('commit') if isinstance(branch, dict) else None
+        if not isinstance(commit, dict) or commit.get('sha') != policy_commit:
+            raise ValueError('protected main moved before release publication')
+
     def find_release():
         match = None
         for page in range(1, 101):
@@ -117,6 +123,8 @@ def publish(asset: Path, policy_commit: str) -> None:
         inspect_release(release, allow_missing_asset=release.get('draft') is True)
         if not exists and release.get('draft') is not True:
             raise ValueError('published release exists without its tag')
+    if release is None or release.get('draft') is True:
+        require_current_main()
     if not exists:
         try:
             api('git/refs', body={'ref': 'refs/tags/' + tag, 'sha': policy_commit})
@@ -126,6 +134,7 @@ def publish(asset: Path, policy_commit: str) -> None:
         if not tag_exists_and_matches():
             raise ValueError('new release tag is missing')
     if release is None:
+        require_current_main()
         gh('release', 'create', tag, '-R', REPOSITORY, '--target', policy_commit,
            '--verify-tag', '--draft', '--title', tag, '--notes', 'Qualified code-health policy bundle.')
         release = find_release()
@@ -138,6 +147,7 @@ def publish(asset: Path, policy_commit: str) -> None:
     current_id = release['id']
     if release['draft']:
         if not has_asset:
+            require_current_main()
             api(f"releases/{release['id']}/assets?name=policy-bundle.tar", upload=data)
         current = find_release()
         if (not isinstance(current, dict) or not tag_exists_and_matches() or
@@ -145,6 +155,7 @@ def publish(asset: Path, policy_commit: str) -> None:
             raise ValueError('release changed before publication')
         inspect_release(current, allow_missing_asset=False)
         require_immutable_setting()
+        require_current_main()
         api(f"releases/{release['id']}", method='PATCH', body={'draft': False})
         release = find_release()
     if (not isinstance(release, dict) or not tag_exists_and_matches() or

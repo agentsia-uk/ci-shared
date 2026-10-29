@@ -23,6 +23,7 @@ class ReleasePublishTests(unittest.TestCase):
         self.ref = None
         self.release = None
         self.enabled = True
+        self.main_commit = COMMIT
         self.extra_releases = []
         self.commands = []
         self.mutations = []
@@ -38,6 +39,8 @@ class ReleasePublishTests(unittest.TestCase):
             if url.endswith('/immutable-releases'):
                 self.assertEqual(request.get_header('Authorization'), 'Bearer read-token')
                 value = {'enabled': self.enabled}
+            elif url.endswith('/branches/main'):
+                value = {'commit': {'sha': self.main_commit}}
             elif url.endswith('/git/refs') and request.get_method() == 'POST':
                 self.assertEqual(request.get_header('Authorization'), 'Bearer test-token')
                 data = json.loads(request.data)
@@ -164,3 +167,11 @@ class ReleasePublishTests(unittest.TestCase):
                 self.assertEqual(self.release['id'], 13)
                 self.assertTrue(self.release['draft'])
                 self.assertNotIn('publish', self.mutations)
+
+    def test_stale_main_refuses_to_create_tag_or_release(self):
+        self.main_commit = 'b' * 40
+        with self.assertRaisesRegex(ValueError, 'main moved'):
+            self.call()
+        self.assertIsNone(self.ref)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.mutations, [])

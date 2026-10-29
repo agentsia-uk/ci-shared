@@ -50,3 +50,38 @@ class QualificationReceiptTests(unittest.TestCase):
         code, receipt = self.run_fixture('open(__file__, "a").write("# changed\\n")')
         self.assertNotEqual(code, 0)
         self.assertFalse(receipt)
+
+    def test_installed_package_cannot_replace_the_bundled_policy(self):
+        self.check_installed_package(regular=True)
+
+    def test_installed_namespace_cannot_supply_missing_modules(self):
+        self.check_installed_package(regular=False)
+
+    def check_installed_package(self, *, regular):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / 'candidate'
+            (candidate / 'code_health').mkdir(parents=True)
+            cli = candidate / 'code_health/cli.py'
+            cli.write_text('value = "candidate"\n')
+            tests = candidate / 'tests'
+            tests.mkdir()
+            test_file = tests / 'test_code_health.py'
+            test_file.write_text('import unittest\nclass Probe(unittest.TestCase):\n    def test_case(self):\n        self.assertTrue(True)\n')
+            installed = root / 'installed/code_health'
+            installed.mkdir(parents=True)
+            if regular:
+                (installed / '__init__.py').write_text('')
+            (installed / 'cli.py').write_text('value = "installed"\n')
+            script = ('import importlib.util, sys; from pathlib import Path; '
+                      's=importlib.util.spec_from_file_location("trusted_qualifier", sys.argv[1]); '
+                      'm=importlib.util.module_from_spec(s); s.loader.exec_module(m); '
+                      'm.run_qualification("tests", Path(sys.argv[2]), 1, sys.argv[3], sys.argv[4], sys.argv[5])')
+            receipt = root / 'receipt.json'
+            result = subprocess.run([sys.executable, '-c', script, str(TRUSTED_ROOT / 'code_health/qualification_tests.py'),
+                                     str(receipt), TEST_HASH, hashlib.sha256(test_file.read_bytes()).hexdigest(),
+                                     hashlib.sha256(cli.read_bytes()).hexdigest()], cwd=candidate,
+                                    env={**os.environ, 'PYTHONPATH': str(installed.parent)}, capture_output=True, timeout=20)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'qualification policy package paths are not isolated', result.stderr)
+            self.assertFalse(receipt.exists())
