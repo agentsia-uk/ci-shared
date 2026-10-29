@@ -142,9 +142,11 @@ jobs:
       contents: read
 ```
 
-The shared workflow requires the consumer's existing approved isolated Linux CI pool, with no hosted fallback. It does not
-install application dependencies or run application scripts, and never
-receives application secrets. The verifier and policy come from the frozen
+The shared workflow requires the consumer's existing approved isolated Linux CI
+pool, with no hosted fallback. It does not install application dependencies or
+explicitly launch application entrypoints. Detector tools may invoke compilers
+or load project tool configuration, so the caller's existing CI isolation is
+still the execution boundary. Application secrets are never passed to scans. The verifier and policy come from the frozen
 shared action rather than the candidate checkout. Scanner configuration is
 reconstructed with plugins and model runners disabled; checked-in local
 Desloppify state is ignored. Only the sanitised `result.json` is uploaded.
