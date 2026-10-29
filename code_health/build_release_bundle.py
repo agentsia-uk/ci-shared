@@ -19,6 +19,7 @@ def runtime_files(repo: str | os.PathLike[str], commit: str) -> set[str]:
     if not COMMIT.fullmatch(commit):
         raise ValueError('release commit must be a full SHA')
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env['GIT_NO_REPLACE_OBJECTS'] = '1'
     raw = subprocess.run(['/usr/bin/git', 'ls-tree', '-r', '-z', '--name-only', f'{commit}^{{commit}}', '--', 'code_health'],
                          cwd=repo, env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120).stdout
     names = [name.decode('utf-8') for name in raw.split(b'\0') if name]
@@ -37,6 +38,7 @@ def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[s
     if not required <= paths:
         raise ValueError('release needs the policy and dependency lock')
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env['GIT_NO_REPLACE_OBJECTS'] = '1'
 
     def git(*args):
         return subprocess.run(['/usr/bin/git', *args], cwd=repo, env=env, check=True, stdout=subprocess.PIPE,

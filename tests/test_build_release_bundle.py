@@ -69,3 +69,12 @@ class BuildReleaseBundleTests(unittest.TestCase):
             data = build_bundle(self.root, self.commit, FILES)
         self.assertFalse(marker.exists())
         self.assertEqual(read_bundle(data, policy_commit=self.commit, allowed_files=FILES)[1]['code_health/cli.py'], b'committed')
+
+    def test_ignores_git_replace_refs_when_reading_the_selected_commit(self):
+        (self.root / 'code_health/cli.py').write_text('replacement')
+        subprocess.run(['git', 'add', 'code_health/cli.py'], cwd=self.root, check=True)
+        subprocess.run(['git', 'commit', '-qm', 'replacement'], cwd=self.root, check=True)
+        replacement = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
+        subprocess.run(['git', 'replace', self.commit, replacement], cwd=self.root, check=True)
+        data = build_bundle(self.root, self.commit, runtime_files(self.root, self.commit))
+        self.assertEqual(read_bundle(data, policy_commit=self.commit, allowed_files=FILES)[1]['code_health/cli.py'], b'committed')
