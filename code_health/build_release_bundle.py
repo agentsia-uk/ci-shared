@@ -10,7 +10,7 @@ import tarfile
 from .release_bundle import COMMIT, MAX_BUNDLE_BYTES
 
 
-def build_bundle(repo, commit, allowed_files):
+def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[str]) -> bytes:
     if not COMMIT.fullmatch(commit):
         raise ValueError('release commit must be a full SHA')
     required = {'code_health/policy.json', 'code_health/requirements.lock'}

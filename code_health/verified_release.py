@@ -7,7 +7,8 @@ from .release_attestation import verify_release
 from .release_bundle import MAX_BUNDLE_BYTES, read_bundle
 
 
-def load_verified_release(asset, *, policy_commit, signer_commit, allowed_files):
+def load_verified_release(asset: str | Path, *, policy_commit: str, signer_commit: str,
+                          allowed_files: set[str]) -> tuple[dict[str, bytes], dict[str, str]]:
     with open(asset, 'rb') as source:
         data = source.read(MAX_BUNDLE_BYTES + 1)
     if len(data) > MAX_BUNDLE_BYTES:

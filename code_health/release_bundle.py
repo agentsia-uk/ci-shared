@@ -11,7 +11,7 @@ SHA256 = re.compile(r'[0-9a-f]{64}\Z')
 COMMIT = re.compile(r'[0-9a-f]{40}\Z')
 
 
-def read_bundle(path, *, policy_commit, allowed_files):
+def read_bundle(path: str | Path | bytes, *, policy_commit: str, allowed_files: set[str]) -> tuple[dict, dict[str, bytes], str]:
     """Return verified runtime bytes; the caller must verify the bundle attestation first."""
     if isinstance(path, bytes):
         data = path

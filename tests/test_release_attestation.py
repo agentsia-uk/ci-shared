@@ -1,9 +1,10 @@
 import json
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
-from code_health.release_attestation import REPOSITORY_ID, verify_release
+from code_health.release_attestation import GH_EXECUTABLE, REPOSITORY_ID, read_command, verify_release
 
 POLICY = 'a' * 40
 SIGNER = 'b' * 40
@@ -13,7 +14,7 @@ class ReleaseAttestationTests(unittest.TestCase):
     def run_verifier(self, *, immutable=True, commit=POLICY, repository_id=REPOSITORY_ID, fail=None):
         calls = []
 
-        def fake_run(argv, **kwargs):
+        def fake_run(argv):
             calls.append(argv)
             if fail is not None and fail in argv:
                 raise subprocess.CalledProcessError(1, argv)
@@ -25,9 +26,9 @@ class ReleaseAttestationTests(unittest.TestCase):
                 value = [{'verificationResult': {'signature': {'certificate': {'sourceRepositoryIdentifier': repository_id}}}}]
             else:
                 value = {}
-            return subprocess.CompletedProcess(argv, 0, json.dumps(value).encode(), b'')
+            return json.dumps(value).encode()
 
-        with patch('code_health.release_attestation.subprocess.run', side_effect=fake_run):
+        with patch('code_health.release_attestation.read_command', side_effect=fake_run):
             result = verify_release('asset.tar', policy_commit=POLICY, signer_commit=SIGNER)
         return result, calls
 
@@ -35,6 +36,7 @@ class ReleaseAttestationTests(unittest.TestCase):
         result, calls = self.run_verifier()
         self.assertEqual(result, 'code-health-' + POLICY)
         self.assertEqual(len(calls), 5)
+        self.assertTrue(all(call[0] == GH_EXECUTABLE for call in calls))
         self.assertIn('verify-asset', calls[3])
         self.assertIn('--signer-digest', calls[4])
         self.assertIn(SIGNER, calls[4])
@@ -49,3 +51,10 @@ class ReleaseAttestationTests(unittest.TestCase):
     def test_rejects_mutable_commit_references(self):
         with self.assertRaises(ValueError):
             verify_release('asset.tar', policy_commit='main', signer_commit=SIGNER)
+
+    def test_subprocess_output_and_runtime_are_bounded(self):
+        self.assertEqual(read_command([sys.executable, '-c', 'print("ok")']), b'ok\n')
+        with self.assertRaisesRegex(ValueError, 'exceeds limit'):
+            read_command([sys.executable, '-c', 'print("x" * 10000)'], limit=128)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            read_command([sys.executable, '-c', 'import time; time.sleep(5)'], timeout=0.1)
