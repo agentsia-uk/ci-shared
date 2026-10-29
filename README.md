@@ -2,7 +2,7 @@
 
 Public, reusable CI workflows for the `agentsia-uk` organisation. This repo is the **single source of truth** for cross-repo CI quality-baseline workflows (designed in [`agentsia-uk/Modelsmith#3237`](https://github.com/agentsia-uk/Modelsmith/issues/3237), council run-id `cross-repo-cicd-3237`).
 
-It is deliberately **public** so that public org repos (e.g. [`assay-harness`](https://github.com/agentsia-uk/assay-harness)) can consume these workflows — GitHub does not allow a public repo to call a reusable workflow hosted in a private repo, and `internal` visibility is not available on the Team plan. Keeping the shared workflows here (rather than in the private `.github` repo) means **no agent-instruction or operational content is ever exposed**: this repo holds workflows only.
+It is deliberately **public** so that public org repos (e.g. [`assay-harness`](https://github.com/agentsia-uk/assay-harness)) can consume these workflows — GitHub does not allow a public repo to call a reusable workflow hosted in a private repo, and `internal` visibility is not available on the Team plan. Keeping the shared workflows here (rather than in the private `.github` repo) means **no agent-instruction or operational content is ever exposed**: this repo holds reusable workflows and their public policy contracts, verifiers and tests.
 
 ## Workflows
 
@@ -75,7 +75,7 @@ body declarations must agree; conflicts fail closed.
 1. **SHA-pin every consumer** (council S2). Bumping a workflow is a deliberate re-pin in each consumer, never a silent mutable-ref drift.
 2. **Single source of truth** (council U-series). Do not re-fork shared policy logic into a consumer repo. Need different behaviour? Add a typed `workflow_call` input here — no copy-paste variants.
 3. **Version is contract-governed.** `shared-secrets-scan.yml`'s `gitleaks-version` default must equal `Modelsmith/config/cross-repo-release-contract.json :: qualityBaseline.secretsScan.version`. Modelsmith's `npm run cross-repo:contract` fails closed on drift.
-4. **No secrets, no agent-instruction files in git.** This repo is public; it holds reusable workflows only. No `CLAUDE.md`/`AGENTS.md`/`.env`/credentials.
+4. **No secrets, no agent-instruction files in git.** This repo is public; it holds reusable workflows and their public policy contracts, verifiers and tests. No `CLAUDE.md`/`AGENTS.md`/`.env`/credentials.
 
 ## Consumers
 
@@ -85,3 +85,80 @@ body declarations must agree; conflicts fail closed.
 - every other current and future `agentsia-uk` repository through the organisation PR-label bootstrap/audit
 
 Licensed under Apache-2.0.
+
+
+### Shared code-health policy and mechanical ratchet
+
+`code-health/policy.json` is the shared policy contract. The strict-score target
+is at least 90 in each coherent project/language area. Subjective reviews use
+`claude-opus-5-5` at high effort every 30 days, with a calibration break when
+the reviewer changes. Subjective scores do not gate merges.
+
+The reusable `shared-code-health.yml` workflow runs full base and candidate
+scans with the same pinned scanner. It refuses an objective-score decrease,
+new mechanical findings in touched files, and remaining T1/T2 findings in
+those files. A cross-file finding counts when any related file is touched.
+Git renames preserve the identity of inherited lower-priority findings.
+Changed detector coverage fails closed. Existing reduced coverage is reported
+explicitly and never described as a complete detector run.
+
+A consumer commits `.github/code-health.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "policyRef": "<40-character shared workflow commit SHA>",
+  "areas": [
+    {"id": "app-typescript", "language": "typescript", "path": ".", "exclusions": []},
+    {"id": "training-python", "language": "python", "path": "training", "exclusions": []}
+  ],
+  "unsupportedLanguages": []
+}
+```
+
+Each path must be one coherent project. A nested project's path is excluded
+from its parent's scan automatically. Every tracked file with a supported
+language extension must belong to a matching language area. Unsupported
+language gaps may be listed as `{"language": "...", "rationale": "..."}`.
+Each explicit exclusion requires `pattern`, `kind` and `rationale`; allowed
+classes are generated, vendored, fixtures, snapshots and build output.
+Arbitrary source exclusions are refused. Optional `strictTarget` and
+`reviewMaxAgeDays` may only tighten the shared policy and the repository's
+previous values. Existing area definitions and exclusions are immutable in
+ordinary PRs so a scope change cannot quietly reset a comparison.
+
+The corresponding caller is unconditional and has no path or branch filters:
+
+```yaml
+on: [pull_request, merge_group]
+permissions:
+  contents: read
+jobs:
+  code-health:
+    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@<same-40-character-SHA>
+    permissions:
+      contents: read
+```
+
+The shared workflow uses a GitHub-hosted ephemeral Linux runner, does not
+install application dependencies or run application scripts, and never
+receives application secrets. The verifier and policy come from the frozen
+shared action rather than the candidate checkout. Scanner configuration is
+reconstructed with plugins and model runners disabled; checked-in local
+Desloppify state is ignored. Only the sanitised `result.json` is uploaded.
+Raw state and logs can contain source excerpts and must stay private.
+
+This first release provides the contract and executable mechanical gate.
+It does **not** activate an organisation ruleset, onboard other repositories,
+schedule monthly reviews, create weekly upgrade PRs, publish points to the
+Code Health dashboard, or import recorded finding dismissals. Those consumers
+and automation must be delivered separately. Weekly tool upgrades, deliberate
+scope migrations and their calibration records need a dedicated reviewed
+upgrade path; this release does not silently rebaseline them.
+
+Run the verifier's tests with the pinned scanner installed:
+
+```sh
+python -m pip install 'desloppify[full]==1.0'
+python -m unittest discover -s tests -v
+```

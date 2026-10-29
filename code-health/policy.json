@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "desloppifyVersion": "1.0",
+  "strictTarget": 90,
+  "review": {"model": "claude-opus-5-5", "effort": "high", "maxAgeDays": 30, "calibrateOnChange": true},
+  "ratchet": {"objectiveDecreaseAllowed": 0, "newTouchedFindingsAllowed": 0, "touchedTiersMustBeClear": [1, 2]},
+  "excludedClasses": ["generated", "vendored", "fixtures", "snapshots", "build"],
+  "upgradeCadenceDays": 7,
+  "cleanup": {"capacityFraction": 0.2, "flexible": true, "priority": ["safety", "architecture", "consistency", "tests"]},
+  "reporting": "code-health-dashboard"
+}

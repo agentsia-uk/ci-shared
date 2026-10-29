@@ -1,0 +1,38 @@
+name: Code health mechanical ratchet
+description: Full base/head project scans using the pinned organisation policy.
+inputs:
+  repository-path:
+    description: Path to a full-history caller checkout.
+    required: true
+  base-sha:
+    description: Exact baseline commit SHA.
+    required: true
+  head-sha:
+    description: Exact candidate commit SHA.
+    required: true
+  output-path:
+    description: Private scan work directory. Only result.json is safe to publish.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install the shared scanner pin
+      shell: bash
+      env:
+        POLICY_ROOT: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        version=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["POLICY_ROOT"])/"policy.json").read_text())["desloppifyVersion"])')
+        python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
+    - name: Compare full scans
+      shell: bash
+      env:
+        POLICY_ROOT: ${{ github.action_path }}
+        REPOSITORY_PATH: ${{ inputs.repository-path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: |
+        set -euo pipefail
+        python "${POLICY_ROOT}/ratchet.py" --repo "${REPOSITORY_PATH}" \
+          --base "${BASE_SHA}" --head "${HEAD_SHA}" --output "${OUTPUT_PATH}"
