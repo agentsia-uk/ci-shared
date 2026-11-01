@@ -272,6 +272,7 @@ class RatchetTests(unittest.TestCase):
             with patch.object(r.sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(1, r.main())
             report = json.loads((output / 'result.json').read_text())
+            self.assertEqual({'result.json'}, {path.name for path in output.iterdir()})
             self.assertEqual(base, report['base'])
             self.assertEqual(head, report['head'])
             self.assertTrue(report['areas'][0]['errors'])

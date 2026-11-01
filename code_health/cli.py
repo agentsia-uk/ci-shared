@@ -426,7 +426,9 @@ def main():
     require(re.fullmatch('[0-9a-f]{40}', args.base) and re.fullmatch('[0-9a-f]{40}', args.head), 'base and head must be full commit SHAs')
     require(version('desloppify') == POLICY['desloppifyVersion'], 'installed scanner version differs from the shared pin')
     verify_scanner()
-    args.output = args.output.resolve()
+    requested_output = args.output.absolute()
+    require(requested_output.resolve() == requested_output, 'result path must not contain symbolic links')
+    args.output = requested_output
     require(re.fullmatch(r'agentsia-uk/[A-Za-z0-9_.-]+', args.repository), 'repository must be an agentsia-uk slug')
     repo = args.repo.resolve()
     args.repo = repo
@@ -445,7 +447,10 @@ def main():
     files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.head], cwd=repo).decode().rstrip('\0').split('\0')
     base_files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.base], cwd=repo).decode().rstrip('\0').split('\0')
     validate_language_coverage(files, head['areas'])
-    args.output.mkdir(parents=True, exist_ok=True)
+    args.output.mkdir(parents=True, mode=0o700, exist_ok=True)
+    output_metadata = args.output.stat()
+    require(output_metadata.st_uid == os.geteuid() and not output_metadata.st_mode & 0o077,
+            'result directory must be private and owned by the caller')
     results = []
     with tempfile.TemporaryDirectory(prefix='code-health-') as temporary:
         root = Path(temporary)
@@ -453,8 +458,8 @@ def main():
             snapshot(repo, sha, root / name)
             (root / name).chmod(0o700)
         for area in head['areas']:
-            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory) if area_has_source(base_files, area, head['areas']) else (None, None)
-            after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory)
+            before = scan(root / 'base', area, root / 'scan-outputs' / area['id'] / 'base', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory) if area_has_source(base_files, area, head['areas']) else (None, None)
+            after = scan(root / 'head', area, root / 'scan-outputs' / area['id'] / 'head', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory)
             result = compare(*before, *after, touched, renames, area['language'], source_roots=(root / 'base', root / 'head'))
             results.append({'area': area['id'], **result})
     report = {
@@ -470,7 +475,16 @@ def main():
         'areas': results,
         'unsupportedLanguages': head.get('unsupportedLanguages', []),
     }
-    (args.output / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
+    with tempfile.NamedTemporaryFile(mode='w', dir=args.output, prefix='.result-', delete=False) as temporary:
+        try:
+            json.dump(report, temporary, indent=2)
+            temporary.write('\n')
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            os.replace(temporary.name, args.output / 'result.json')
+        finally:
+            if os.path.exists(temporary.name):
+                os.unlink(temporary.name)
     print(json.dumps(report, indent=2))
     return int(any(r['errors'] for r in results))
 
