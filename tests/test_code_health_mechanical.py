@@ -171,6 +171,14 @@ class MechanicalProjectionTests(unittest.TestCase):
         status, state = inputs()
         state['scan_coverage']['python']['detectors'] = {'security': {'status': 'full', 'confidence': .8}}
         self.assertNotEqual(baseline['comparabilityKey'], project(status, state)['comparabilityKey'])
+        status, state = inputs()
+        state['scan_coverage']['python']['detectors'] = {'security': {'status': 'reduced', 'confidence': .5, 'reason': 'one'}}
+        one = project(status, state)
+        state['scan_coverage']['python']['detectors']['security']['reason'] = 'two'
+        self.assertNotEqual(one['comparabilityKey'], project(status, state)['comparabilityKey'])
+        state['scan_coverage']['python']['detectors']['security']['reason'] = 'PASS' + 'WORD=synthetic-value'
+        with self.assertRaisesRegex(ValueError, 'output boundary'):
+            project(status, state)
         first = project(scan_config={**SCAN_CONFIG, 'exclude': ['one', 'two']})
         second = project(scan_config={**SCAN_CONFIG, 'exclude': ['two', 'one']})
         self.assertEqual(first['comparabilityKey'], second['comparabilityKey'])
