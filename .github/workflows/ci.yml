@@ -44,3 +44,20 @@ jobs:
           version=$(python -c 'import json; print(json.load(open("code_health/policy.json"))["desloppifyVersion"])')
           python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
           python -m unittest discover -s tests -v
+
+  qualification-container-boundary:
+    name: Qualification container boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      QUALIFICATION_TEST_IMAGE: docker.io/library/python@sha256:3856e3e7bf4d0ba061501a84ed2eb0d429663307c0f54f191dc4de03c7081c3e
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Fetch pinned probe image
+        run: docker pull "$QUALIFICATION_TEST_IMAGE"
+      - name: Test effective isolation in a real container
+        run: python3 -m unittest tests.test_qualification_container_integration -v
