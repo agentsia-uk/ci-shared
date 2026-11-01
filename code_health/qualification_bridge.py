@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import types
 
 MAX_REQUEST_BYTES = 64 * 1024
 
@@ -109,16 +110,31 @@ def _scanner_fixture(policy, operation):
 
 def _scanner_mapping_fixture(policy):
     patch = policy.scanner_patch
-    source = patch.scanner_source().read_bytes()
-    if hashlib.sha256(source).hexdigest() != patch.PATCHED_SHA256:
-        source = patch.patched_bytes(source)
-    namespace = {'__name__': 'desloppify.languages.typescript.test_coverage'}
-    exec(compile(source, '<candidate-scanner>', 'exec'), namespace)
-    mapping = namespace['map_test_to_source']
-    return {'sourceSha256': hashlib.sha256(source).hexdigest(),
+    sources = {}
+    for name, spec in patch.COMPONENTS.items():
+        source = patch.scanner_source(name).read_bytes()
+        if hashlib.sha256(source).hexdigest() != spec['patched']:
+            source = patch.patched_component(name, source)
+        sources[name] = source
+    identity = ''.join(f'{name}:{hashlib.sha256(sources[name]).hexdigest()}\n' for name in sorted(sources)).encode()
+    ts = {'__name__': 'desloppify.languages.typescript.test_coverage'}
+    py = {'__name__': 'desloppify.languages.python.test_coverage'}
+    mapper = {'__name__': 'desloppify.engine.detectors.coverage.mapping_imports'}
+    for name, namespace in [('typescript', ts), ('python', py), ('mapping', mapper)]:
+        exec(compile(sources[name], '<candidate-scanner>', 'exec'), namespace)
+    mapping = ts['map_test_to_source']
+    parse, resolve = py['parse_test_import_specs'], py['resolve_import_spec']
+    mapper['read_coverage_file'] = lambda *_args, **_kwargs: types.SimpleNamespace(ok=True, content='from . import missing\n')
+    mapper['_load_lang_test_coverage_module'] = lambda _lang: types.SimpleNamespace(parse_test_import_specs=parse, resolve_import_spec=resolve)
+    unrelated = mapper['_parse_test_imports']('src/pkg/tests/test_bridge.py', {'src/other/missing.py'},
+                                              {'missing': 'src/other/missing.py'}, 'python')
+    return {'patchSha256': hashlib.sha256(identity).hexdigest(),
             'exact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
             'ambiguousName': mapping('other/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
-            'ambiguousExact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/db/health.tsx'})}
+            'ambiguousExact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/db/health.tsx'}),
+            'pythonNames': sorted(parse('from code_health import cli, qualification_bridge\n')),
+            'relative': resolve('..qualification_bridge', 'src/pkg/tests/test_bridge.py', {'src/pkg/qualification_bridge.py'}),
+            'unrelatedRelative': sorted(unrelated)}
 
 
 def observe(request, policy):

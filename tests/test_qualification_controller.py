@@ -57,7 +57,7 @@ class QualificationControllerTests(unittest.TestCase):
 
     def test_scanner_mapping_requires_expected_bytes_and_unambiguous_results(self):
         expected = next(case[3] for case in qualification_cases() if case[0] == 'scanner-mapping')
-        for change in ({'sourceSha256': '0' * 64}, {'exact': 'src/api/routes/health.ts'},
+        for change in ({'patchSha256': '0' * 64}, {'exact': 'src/api/routes/health.ts'},
                        {'ambiguousName': 'src/db/health.ts'}, {'ambiguousExact': 'src/db/health.ts'}):
             observation = {'schemaVersion': 1, 'caseId': 'scanner-mapping', 'outcome': 'returned',
                            'value': {**expected, **change}}
