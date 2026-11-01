@@ -13,7 +13,7 @@ BOOT = '12345678-1234-1234-1234-123456789abc'
 
 def container(task, identity, pid, ident):
     tags = {scanner_recovery.PREFIX + key: value for key, value in {
-        'task': str(task), 'identity': identity, 'boot': BOOT, 'pid': str(pid), 'start': '99'}.items()}
+        'task': str(task), 'identity': identity, 'boot': BOOT, 'namespace': '1:2', 'pid': str(pid), 'start': '99'}.items()}
     mounts = [{'Source': str(task / name), 'Destination': target, 'RW': writable} for name, target, writable in
               [('source', '/source', False), ('readers', '/opt/code-health/readers', False), ('output', '/output', True)]]
     return {'Id': ident, 'Image': 'sha256:' + 'b' * 64,
@@ -38,6 +38,7 @@ class ScannerRecoveryTests(unittest.TestCase):
                        subprocess.CompletedProcess([], 0, stdout=json.dumps(stale_record).encode())]
             with patch.object(scanner_recovery.subprocess, 'run', side_effect=replies), \
                     patch.object(scanner_recovery, '_boot', return_value=BOOT), \
+                    patch.object(scanner_recovery, '_namespace', return_value='1:2'), \
                     patch.object(scanner_recovery, '_start', side_effect=lambda pid: '99' if pid == 100 else '100'), \
                     patch.object(scanner_container, '_validate_inspection'), patch.object(scanner_container, '_remove') as remove, \
                     patch.object(scanner_recovery, 'cleanup') as clean:
@@ -57,6 +58,7 @@ class ScannerRecoveryTests(unittest.TestCase):
                        subprocess.CompletedProcess([], 0, stdout=json.dumps(record).encode())]
             with patch.object(scanner_recovery.subprocess, 'run', side_effect=replies), \
                     patch.object(scanner_recovery, '_boot', return_value=BOOT), \
+                    patch.object(scanner_recovery, '_namespace', return_value='1:2'), \
                     patch.object(scanner_recovery, '_start', return_value=None), \
                     patch.object(scanner_container, '_validate_inspection'), patch.object(scanner_container, '_remove') as remove, \
                     patch.object(scanner_recovery, 'cleanup') as clean:
@@ -75,6 +77,26 @@ class ScannerRecoveryTests(unittest.TestCase):
                    'CODE_HEALTH_TASK_ID': f'{info.st_dev}:{info.st_ino}'}
             with patch.dict(os.environ, env), self.assertRaisesRegex(ValueError, 'managed task'):
                 scanner_recovery.labels([parent])
+
+    def test_different_process_namespace_is_treated_as_uncertain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory).resolve()
+            task = parent / 'code-health-task.Live1234'
+            task.mkdir(mode=0o700)
+            info = task.stat()
+            record = container(task, f'{info.st_dev}:{info.st_ino}', 101, 'c' * 64)
+            replies = [subprocess.CompletedProcess([], 0, stdout=('c' * 64).encode()),
+                       subprocess.CompletedProcess([], 0, stdout=json.dumps(record).encode())]
+            with patch.object(scanner_recovery.subprocess, 'run', side_effect=replies), \
+                    patch.object(scanner_recovery, '_boot', return_value=BOOT), \
+                    patch.object(scanner_recovery, '_namespace', return_value='3:4'), \
+                    patch.object(scanner_recovery, '_start') as start, \
+                    patch.object(scanner_container, '_validate_inspection'), \
+                    patch.object(scanner_container, '_remove') as remove:
+                scanner_recovery.sweep(parent)
+            start.assert_not_called()
+            remove.assert_not_called()
+            self.assertTrue(task.is_dir())
 
 
 if __name__ == '__main__':

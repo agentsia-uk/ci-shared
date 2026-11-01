@@ -35,6 +35,11 @@ def _start(pid):
     return None if fields[0] == 'Z' else fields[19]
 
 
+def _namespace():
+    metadata = os.stat('/proc/self/ns/pid')
+    return f'{metadata.st_dev}:{metadata.st_ino}'
+
+
 def _task(parent, path, identity, *, missing_ok=False):
     parent = Path(parent).resolve(strict=True)
     path = Path(path).absolute()
@@ -62,7 +67,8 @@ def labels(paths):
     if start is None:
         raise ValueError('scanner owner identity is unavailable')
     return {PREFIX + 'task': str(task), PREFIX + 'identity': identity,
-            PREFIX + 'boot': _boot(), PREFIX + 'pid': str(os.getpid()), PREFIX + 'start': start}
+            PREFIX + 'boot': _boot(), PREFIX + 'namespace': _namespace(),
+            PREFIX + 'pid': str(os.getpid()), PREFIX + 'start': start}
 
 
 def sweep(parent):
@@ -94,9 +100,16 @@ def sweep(parent):
         if record['Config']['User'] != f'{os.getuid()}:{os.getgid()}':
             continue
         tags = record['Config']['Labels']
-        task_text, identity, boot, pid, start = (tags[PREFIX + key] for key in ('task', 'identity', 'boot', 'pid', 'start'))
-        if not BOOT.fullmatch(boot) or not pid.isascii() or not pid.isdecimal() or int(pid) < 1 or not start.isascii() or not start.isdecimal():
-            raise ValueError('invalid scanner owner identity')
+        if not isinstance(tags, dict):
+            continue
+        values = [tags.get(PREFIX + key) for key in ('task', 'identity', 'boot', 'namespace', 'pid', 'start')]
+        if any(not isinstance(value, str) for value in values):
+            continue
+        task_text, identity, boot, namespace, pid, start = values
+        if (not BOOT.fullmatch(boot) or not IDENTITY.fullmatch(namespace) or not pid.isascii()
+                or not pid.isdecimal() or len(pid) > 10 or int(pid) < 1
+                or not start.isascii() or not start.isdecimal() or len(start) > 20):
+            continue
         task = Path(task_text).absolute()
         if task.parent != parent:
             continue
@@ -117,7 +130,7 @@ def sweep(parent):
                 ('/source', 'readonly'), ('/opt/code-health/readers', 'readonly'), ('/output', '')}:
             raise ValueError('unexpected scanner container mounts')
         _validate_inspection(record, record['Image'], mounts)
-        alive = boot == _boot() and _start(int(pid)) == start
+        alive = boot == _boot() and (namespace != _namespace() or _start(int(pid)) == start)
         groups.setdefault((task, identity), []).append((container, alive, cleanup_allowed))
     for (task, identity), containers in groups.items():
         if any(alive for _, alive, _ in containers):

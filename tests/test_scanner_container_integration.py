@@ -31,7 +31,8 @@ class ScannerContainerTests(unittest.TestCase):
                         (task / name).mkdir(mode=0o700)
                     info = task.stat()
                     labels = {'task': str(task), 'identity': f'{info.st_dev}:{info.st_ino}',
-                              'boot': scanner_recovery._boot(), 'pid': str(os.getpid()), 'start': start}
+                              'boot': scanner_recovery._boot(), 'namespace': scanner_recovery._namespace(),
+                              'pid': str(os.getpid()), 'start': start}
                     command = ['docker', 'create', '--rm', '--pull', 'never', '--network', 'none', '--read-only',
                                '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                                '--security-opt', 'seccomp=builtin', '--ipc', 'none', '--user', f'{os.getuid()}:{os.getgid()}']
