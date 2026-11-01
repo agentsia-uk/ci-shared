@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +10,24 @@ from code_health import scanner_container
 
 
 class ScannerContainerTests(unittest.TestCase):
+    def test_inspection_rejects_network_even_when_other_settings_match(self):
+        image = 'sha256:' + 'b' * 64
+        mounts = [(Path('/source'), '/source', 'readonly'), (Path('/readers'), '/readers', 'readonly'),
+                  (Path('/output'), '/output', '')]
+        record = {'Image': image, 'Config': {'User': f'{os.getuid()}:{os.getgid()}'},
+                  'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False,
+                                 'IpcMode': 'none', 'CapDrop': ['ALL'],
+                                 'SecurityOpt': ['no-new-privileges', 'seccomp=builtin']},
+                  'Mounts': [{'Source': str(source), 'Destination': target, 'RW': mode != 'readonly'}
+                             for source, target, mode in mounts]}
+        response = subprocess.CompletedProcess([], 0, stdout=json.dumps(record).encode())
+        with patch.object(scanner_container.subprocess, 'run', return_value=response):
+            scanner_container._inspect('a' * 64, image, mounts, {})
+            record['HostConfig']['NetworkMode'] = 'bridge'
+            response.stdout = json.dumps(record).encode()
+            with self.assertRaisesRegex(ValueError, 'restrictions differ'):
+                scanner_container._inspect('a' * 64, image, mounts, {})
+
     def test_rejects_mutable_images_and_overlapping_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -31,6 +51,7 @@ class ScannerContainerTests(unittest.TestCase):
             created = subprocess.CompletedProcess([], 0, stdout=b'a' * 64)
             with patch.object(scanner_container.os, 'geteuid', return_value=root.stat().st_uid), \
                     patch.object(scanner_container, '_require_seccomp'), \
+                    patch.object(scanner_container, '_inspect'), \
                     patch.object(scanner_container.subprocess, 'run', return_value=created) as run, \
                     patch.object(scanner_container, '_capture', side_effect=TimeoutError('timeout')):
                 with self.assertRaises(TimeoutError):

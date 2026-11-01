@@ -1,5 +1,6 @@
 """Run a caller-verified scanner image with private, read-only inputs."""
 import os
+import json
 from pathlib import Path
 import re
 import selectors
@@ -43,6 +44,26 @@ def _capture(command, env):
         child.stdout.close()
 
 
+def _inspect(container, image, mounts, env):
+    raw = subprocess.run([DOCKER, 'inspect', '--format', '{{json .}}', container], env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
+    if len(raw) > 1024 * 1024:
+        raise ValueError('scanner container inspection exceeds its size limit')
+    try:
+        record = json.loads(raw)
+        host = record['HostConfig']
+        actual = {(item['Source'], item['Destination'], item['RW']) for item in record['Mounts']}
+        expected = {(str(source), target, mode != 'readonly') for source, target, mode in mounts}
+        if (record['Image'] != image or record['Config']['User'] != f'{os.getuid()}:{os.getgid()}'
+                or host['NetworkMode'] != 'none' or host['ReadonlyRootfs'] is not True
+                or host['Privileged'] is not False or host['IpcMode'] != 'none'
+                or host['CapDrop'] != ['ALL'] or 'no-new-privileges' not in host['SecurityOpt']
+                or 'seccomp=builtin' not in host['SecurityOpt'] or actual != expected):
+            raise ValueError('scanner container restrictions differ from the required policy')
+    except (KeyError, TypeError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError('invalid scanner container inspection') from error
+
+
 def run_scanner(*, image, source, readers, output, arguments):
     """The caller must verify the image and reader bytes before invoking this function."""
     if not isinstance(image, str) or not IMAGE.fullmatch(image) or os.geteuid() == 0:
@@ -78,6 +99,7 @@ def run_scanner(*, image, source, readers, output, arguments):
     if not CONTAINER.fullmatch(created):
         raise ValueError('invalid scanner container identity')
     try:
+        _inspect(created, image, mounts, env)
         return _capture([DOCKER, 'start', '--attach', created], env)
     finally:
         subprocess.run([DOCKER, 'rm', '--force', created], env=env, stdout=subprocess.DEVNULL,
