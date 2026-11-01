@@ -81,6 +81,7 @@ def sweep(parent):
     if len(listing) > 128 * 1024:
         raise ValueError('scanner container inventory exceeds its limit')
     groups = {}
+    protected = set()
     for raw in listing.splitlines():
         container = raw.decode('ascii')
         if not SHA.fullmatch(container):
@@ -104,11 +105,16 @@ def sweep(parent):
             continue
         values = [tags.get(PREFIX + key) for key in ('task', 'identity', 'boot', 'namespace', 'pid', 'start')]
         if any(not isinstance(value, str) for value in values):
+            candidate = tags.get(PREFIX + 'task')
+            if isinstance(candidate, str) and Path(candidate).absolute().parent == parent:
+                protected.add(Path(candidate).absolute())
             continue
         task_text, identity, boot, namespace, pid, start = values
         if (not BOOT.fullmatch(boot) or not IDENTITY.fullmatch(namespace) or not pid.isascii()
                 or not pid.isdecimal() or len(pid) > 10 or int(pid) < 1
                 or not start.isascii() or not start.isdecimal() or len(start) > 20):
+            if Path(task_text).absolute().parent == parent:
+                protected.add(Path(task_text).absolute())
             continue
         task = Path(task_text).absolute()
         if task.parent != parent:
@@ -134,15 +140,26 @@ def sweep(parent):
         groups.setdefault((task, identity), []).append((container, alive, cleanup_allowed))
     for (task, identity), containers in groups.items():
         if any(alive for _, alive, _ in containers):
+            protected.add(task)
             continue
         for container, _, _ in containers:
             _remove(container, ENVIRONMENT)
         if all(allowed for _, _, allowed in containers):
             cleanup(parent, task, identity)
+    return protected
+
+
+def cleanup_if_idle(parent, task, identity):
+    protected = sweep(parent)
+    if Path(task).absolute() not in protected:
+        cleanup(parent, task, identity)
 
 
 if __name__ == '__main__':
     import sys
-    if len(sys.argv) != 2:
-        raise SystemExit('expected runner temporary directory')
-    sweep(sys.argv[1])
+    if len(sys.argv) == 2:
+        sweep(sys.argv[1])
+    elif len(sys.argv) == 4:
+        cleanup_if_idle(*sys.argv[1:])
+    else:
+        raise SystemExit('expected runner temporary directory and optional task identity')

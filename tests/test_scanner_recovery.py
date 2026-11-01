@@ -42,9 +42,10 @@ class ScannerRecoveryTests(unittest.TestCase):
                     patch.object(scanner_recovery, '_start', side_effect=lambda pid: '99' if pid == 100 else '100'), \
                     patch.object(scanner_container, '_validate_inspection'), patch.object(scanner_container, '_remove') as remove, \
                     patch.object(scanner_recovery, 'cleanup') as clean:
-                scanner_recovery.sweep(parent)
+                protected = scanner_recovery.sweep(parent)
             remove.assert_called_once_with('c' * 64, scanner_recovery.ENVIRONMENT)
             clean.assert_called_once_with(parent, stale, identity(stale))
+            self.assertIn(live, protected)
             self.assertTrue(live.is_dir())
 
     def test_changed_task_is_preserved_while_its_dead_container_is_removed(self):
@@ -97,6 +98,13 @@ class ScannerRecoveryTests(unittest.TestCase):
             start.assert_not_called()
             remove.assert_not_called()
             self.assertTrue(task.is_dir())
+
+    def test_action_cleanup_never_removes_a_task_with_a_live_owner(self):
+        task = Path('/tmp/code-health-task.Live1234')
+        with patch.object(scanner_recovery, 'sweep', return_value={task}), \
+                patch.object(scanner_recovery, 'cleanup') as clean:
+            scanner_recovery.cleanup_if_idle('/tmp', task, '1:2')
+        clean.assert_not_called()
 
 
 if __name__ == '__main__':

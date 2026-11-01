@@ -78,6 +78,5 @@ runs:
       run: |
         set -euo pipefail
         if [[ -n "${TASK_TO_CLEAN:-}" && -n "${TASK_ID_TO_CLEAN:-}" ]]; then
-          python3 -I -c 'import runpy,sys; root=sys.argv.pop(1); sys.path.insert(0,root); runpy.run_module("code_health.scanner_recovery",run_name="__main__")' "$(dirname "$POLICY_ROOT")" "${RUNNER_TEMP:?}"
-          python3 -I "${POLICY_ROOT}/cleanup_task.py" "${RUNNER_TEMP:?}" "$TASK_TO_CLEAN" "$TASK_ID_TO_CLEAN"
+          python3 -I -c 'import runpy,sys; root=sys.argv.pop(1); sys.path.insert(0,root); runpy.run_module("code_health.scanner_recovery",run_name="__main__")' "$(dirname "$POLICY_ROOT")" "${RUNNER_TEMP:?}" "$TASK_TO_CLEAN" "$TASK_ID_TO_CLEAN"
         fi
