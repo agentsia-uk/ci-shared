@@ -196,9 +196,17 @@ release workflow or required gate; their unit tests do not establish that a
 real attestation or a Linux installation has been qualified. The dependency
 lock targets Python 3.13 on Linux x86-64 or ARM64 with glibc 2.34 or newer.
 
+The reader lock pins the upstream manifest and platform archive hashes. The
+bundle builder requires all three exact reader archives and includes them with
+the metadata; the bundle verifier checks their bytes against that lock. No
+release workflow has yet qualified or activated the bundled readers. The scanner
+still needs a read-only runtime and complete release qualification.
+
 Run the verifier's tests with the pinned scanner installed:
 
 ```sh
-python -m pip install 'desloppify[full]==1.0'
-python -m unittest discover -s tests -v
+python -m venv .venv
+.venv/bin/python -m pip install --only-binary=:all: --require-hashes -r code_health/requirements.lock
+.venv/bin/python code_health/scanner_patch.py
+.venv/bin/python -m unittest discover -s tests -v
 ```

@@ -47,6 +47,7 @@ jobs:
           "$tool_dir/bin/python" -I code_health/scanner_patch.py
           unset PYTHONPATH PYTHONHOME
           "$tool_dir/bin/python" -m unittest discover -s tests -v
+          CODE_HEALTH_READER_INTEGRATION=1 "$tool_dir/bin/python" -m unittest tests.test_readers_integration -v
 
   qualification-container-boundary:
     name: Qualification container boundary

@@ -6,6 +6,8 @@ import re
 import tarfile
 from pathlib import Path, PurePosixPath
 
+from .readers_lock import ASSET_NAMES, locked_package_version, verify_archive, verify_manifest
+
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
 COMMIT = re.compile(r'[0-9a-f]{40}\Z')
@@ -81,4 +83,21 @@ def read_bundle(path: str | Path | bytes, *, policy_commit: str, allowed_files: 
         raise ValueError('invalid bundled policy') from error
     if not isinstance(policy, dict) or policy.get('desloppifyVersion') != manifest['desloppifyVersion']:
         raise ValueError('bundled policy version mismatch')
+    reader_files = {'code_health/readers-lock.json', 'code_health/readers-upstream.json'}
+    present = reader_files & files.keys()
+    reader_version = policy.get('readerMetadataVersion')
+    if reader_version is None and set(ASSET_NAMES.values()) & files.keys():
+        raise ValueError('reader archives have no declared metadata')
+    if reader_version is not None or present:
+        if type(reader_version) is not int or reader_version != 1 or present != reader_files:
+            raise ValueError('reader metadata is missing or undeclared')
+        try:
+            lock = verify_manifest(files['code_health/readers-lock.json'], files['code_health/readers-upstream.json'],
+                                   package_version=locked_package_version(files['code_health/requirements.lock']), grammars=set())
+            if not set(ASSET_NAMES.values()) <= files.keys():
+                raise ValueError('reader archives are missing')
+            for platform, name in ASSET_NAMES.items():
+                verify_archive(files[name], lock=lock, platform=platform)
+        except (AttributeError, ValueError, UnicodeError) as error:
+            raise ValueError('invalid reader metadata') from error
     return manifest, files, hashlib.sha256(manifest_bytes).hexdigest()

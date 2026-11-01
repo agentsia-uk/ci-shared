@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "desloppifyVersion": "1.0",
+  "readerMetadataVersion": 1,
   "scannerPatch": {"id": "coverage-test-mapping-v2", "sha256": "75b659ceec01b327f6a7e958ecb3dfba1c12d0adf3d9599ecac95886b86de360"},
   "strictTarget": 90,
   "review": {"model": "claude-opus-5-5", "effort": "high", "maxAgeDays": 30, "calibrateOnChange": true},
