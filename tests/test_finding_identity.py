@@ -70,7 +70,13 @@ class FindingIdentityTests(unittest.TestCase):
 
     def test_typescript_and_tsx_unique_unchanged_statements_can_move(self):
         examples = [('src/example.ts', 'export function validate(value: string) {\n  return eval(value);\n}\n'),
-                    ('src/example.tsx', 'export const View = () => (\n  <div dangerouslySetInnerHTML={{__html: value}} />\n);\n')]
+                    ('src/example.tsx', 'export const View = () => (\n  <div dangerouslySetInnerHTML={{__html: value}} />\n);\n'),
+                    ('src/example.js', 'export function validate(value) {\n  return eval(value);\n}\n'),
+                    ('src/example.jsx', 'export const View = () => (\n  <div dangerouslySetInnerHTML={{__html: value}} />\n);\n'),
+                    ('src/example.mts', 'export function validate(value: string) {\n  return eval(value);\n}\n'),
+                    ('src/example.cts', 'export function validate(value: string) {\n  return eval(value);\n}\n'),
+                    ('src/example.mjs', 'export function validate(value) {\n  return eval(value);\n}\n'),
+                    ('src/example.cjs', 'function validate(value) {\n  return eval(value);\n}\n')]
         for path, source in examples:
             with self.subTest(path=path):
                 old, new = finding(2, path=path), finding(3, path=path)
