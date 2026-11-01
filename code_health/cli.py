@@ -255,14 +255,18 @@ def git_blob(repo, sha, path, *, max_bytes, optional=False):
     return raw
 
 
-def trusted_dismissals(repo, head, repository, areas):
+def load_dismissal_ledger(repo, head, areas):
     raw = git_blob(repo, head, dismissals.LEDGER, max_bytes=dismissals.MAX_LEDGER_BYTES, optional=True)
     if raw is None:
         return [], None
     ledger = json.loads(raw)
     entries = dismissals.validate_ledger(ledger, {a['id'] for a in areas}, POLICY['desloppifyVersion'])
+    return entries, dismissals.digest(ledger)
+
+
+def authenticate_dismissals(repo, head, repository, entries):
     if not entries:
-        return [], dismissals.digest(ledger)
+        return []
     token = os.environ.get('CODE_HEALTH_GITHUB_TOKEN')
     require(token, 'dismissal imports require read-only authenticated PR metadata')
 
@@ -271,8 +275,12 @@ def trusted_dismissals(repo, head, repository, areas):
         require(ancestry.returncode in {0, 1}, 'could not verify dismissal PR ancestry')
         return ancestry.returncode == 0
 
-    records = dismissals.authenticate(entries, repository, api=dismissals.github_reader(repository, token), contains=contains)
-    return records, dismissals.digest(ledger)
+    return dismissals.authenticate(entries, repository, api=dismissals.github_reader(repository, token), contains=contains)
+
+
+def trusted_dismissals(repo, head, repository, areas):
+    entries, ledger_hash = load_dismissal_ledger(repo, head, areas)
+    return authenticate_dismissals(repo, head, repository, entries), ledger_hash
 
 
 def changed_paths(repo, base, head):
@@ -473,7 +481,8 @@ def main():
     evidence = upgrade_evidence(event, args, touched) if base is not None and base['policyRef'] != head['policyRef'] else None
     validate_transition(base, head, upgrade=evidence is not None)
     provenance = execution_provenance(repo, args, head)
-    records, ledger_hash = trusted_dismissals(repo, args.head, args.repository, head['areas'])
+    entries, ledger_hash = load_dismissal_ledger(repo, args.head, head['areas'])
+    records = authenticate_dismissals(repo, args.head, args.repository, entries)
     files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.head], cwd=repo).decode().rstrip('\0').split('\0')
     base_files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.base], cwd=repo).decode().rstrip('\0').split('\0')
     validate_language_coverage(files, head['areas'])

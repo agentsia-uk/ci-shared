@@ -165,6 +165,10 @@ class DismissalTrustTests(unittest.TestCase):
             data = metadata(value)
             data['pulls/7']['head']['sha'] = head
             data[f'contents/{d.LEDGER}?ref={head}'] = data.pop(f'contents/{d.LEDGER}?ref=' + 'c' * 40)
+            with patch.dict(cli.os.environ, {}, clear=True):
+                loaded, independent_hash = cli.load_dismissal_ledger(repo, head, [AREA])
+            self.assertEqual(loaded, [value])
+            self.assertEqual(independent_hash, d.digest({'schemaVersion': 1, 'entries': [value]}))
             with patch.dict(cli.os.environ, {}, clear=True), self.assertRaisesRegex(ValueError, 'metadata'):
                 cli.trusted_dismissals(repo, head, 'agentsia-uk/example', [AREA])
             with patch.dict(cli.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(d, 'github_reader', return_value=data.__getitem__):
