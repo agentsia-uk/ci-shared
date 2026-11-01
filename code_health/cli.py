@@ -198,7 +198,7 @@ def upgrade_evidence(event, args, touched):
             sha = pr['head']['sha']
             require(re.fullmatch('[0-9a-f]{40}', sha), 'invalid upgrade head SHA')
             contained = git_process(['merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            require(contained.returncode in {0, 1, 128}, 'could not verify queued upgrade ancestry')
+            require(contained.returncode in {0, 1}, 'could not verify queued upgrade ancestry')
             if contained.returncode:
                 continue
             ancestor = run(['git', 'merge-base', pr['base']['sha'], sha], cwd=args.repo).decode().strip()

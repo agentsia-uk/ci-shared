@@ -119,6 +119,9 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual({'pullRequest': 1, 'headSha': 'd' * 40}, r.upgrade_evidence(event, args, {'src/app.py', r.CONFIG}))
         with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
             self.assertIsNone(r.upgrade_evidence(event, args, {r.CONFIG}))
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=128)):
+            with self.assertRaisesRegex(ValueError, 'could not verify queued upgrade ancestry'):
+                r.upgrade_evidence(event, args, {r.CONFIG})
 
     def test_every_supported_source_language_requires_an_area(self):
         r.validate_language_coverage(['src/a.py', 'README.md'], config()['areas'])
