@@ -43,7 +43,7 @@ jobs:
         run: |
           tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-tool.XXXXXXXX")
           python -I -m venv "$tool_dir"
-          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
           "$tool_dir/bin/python" -I code_health/scanner_patch.py
           unset PYTHONPATH PYTHONHOME
           "$tool_dir/bin/python" -m unittest discover -s tests -v

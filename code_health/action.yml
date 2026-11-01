@@ -24,7 +24,7 @@ runs:
         set -euo pipefail
         tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-tool.XXXXXXXX")
         python -I -m venv "$tool_dir"
-        "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --require-hashes -r "${POLICY_ROOT}/requirements.lock"
+        "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r "${POLICY_ROOT}/requirements.lock"
         "$tool_dir/bin/python" -I "${POLICY_ROOT}/scanner_patch.py"
         printf 'CODE_HEALTH_PYTHON=%s/bin/python\n' "$tool_dir" >> "$GITHUB_ENV"
     - name: Compare full scans
