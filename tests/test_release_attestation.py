@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from code_health.release_attestation import GH_EXECUTABLE, REPOSITORY_ID, read_command, verify_release
+from code_health.release_attestation import GH_EXECUTABLE, REPOSITORY_ID, read_command, verify_local_attestation, verify_release
 
 POLICY = 'a' * 40
 SIGNER = 'b' * 40
@@ -50,6 +50,31 @@ class ReleaseAttestationTests(unittest.TestCase):
                        {'version': '2.101.0'}, {'version': 'unknown'}]:
             with self.subTest(kwargs=kwargs), self.assertRaises((ValueError, subprocess.CalledProcessError)):
                 self.run_verifier(**kwargs)
+
+    def test_local_attestation_is_bound_to_exact_run_and_attempt(self):
+        certificate = {'sourceRepositoryIdentifier': REPOSITORY_ID, 'buildTrigger': 'push',
+                       'runInvocationURI': 'https://github.com/agentsia-uk/ci-shared/actions/runs/12/attempts/2'}
+        def command(argv):
+            if argv[1] == '--version':
+                return b'gh version 2.102.0 (test)\n'
+            return json.dumps([{'verificationResult': {'signature': {'certificate': certificate}}}]).encode()
+        with patch('code_health.release_attestation.read_command', side_effect=command):
+            verify_local_attestation('asset.tar', policy_commit=POLICY, signer_commit=SIGNER, run_id=12, run_attempt=2)
+            for altered in ({'runInvocationURI': 'https://github.com/agentsia-uk/ci-shared/actions/runs/12/attempts/1'},
+                            {'buildTrigger': 'pull_request'}, {'runInvocationURI': None}):
+                original = certificate.copy()
+                certificate.update(altered)
+                with self.assertRaisesRegex(ValueError, 'run identity'):
+                    verify_local_attestation('asset.tar', policy_commit=POLICY, signer_commit=SIGNER, run_id=12, run_attempt=2)
+                certificate.clear()
+                certificate.update(original)
+            with self.assertRaisesRegex(ValueError, 'run identity'):
+                verify_local_attestation('asset.tar', policy_commit=POLICY, signer_commit=SIGNER, run_id=12)
+        prior = {**certificate, 'runInvocationURI': 'https://github.com/agentsia-uk/ci-shared/actions/runs/11/attempts/1'}
+        multi = [{'verificationResult': {'signature': {'certificate': item}}} for item in (prior, certificate)]
+        with patch('code_health.release_attestation.read_command', return_value=json.dumps(multi).encode()):
+            verify_local_attestation('asset.tar', policy_commit=POLICY, signer_commit=SIGNER,
+                                     check_version=False, run_id=12, run_attempt=2)
 
     def test_rejects_mutable_commit_references(self):
         with self.assertRaises(ValueError):

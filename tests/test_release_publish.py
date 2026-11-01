@@ -144,6 +144,7 @@ class ReleasePublishTests(unittest.TestCase):
             publish_verified.side_effect = check_snapshot
             run()
             publish_verified.assert_called_once()
+            self.assertEqual((verify.call_args.kwargs['run_id'], verify.call_args.kwargs['run_attempt']), (1, 1))
 
     def test_publication_refuses_symlinked_inputs(self):
         qualification = Path(self.directory.name) / 'observations.json'

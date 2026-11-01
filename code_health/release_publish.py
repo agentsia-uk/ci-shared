@@ -231,7 +231,8 @@ def publish(asset: Path, policy_commit: str, *, repo: Path, qualification: Path,
     with tempfile.TemporaryDirectory(prefix='code-health-publish-') as directory:
         frozen = Path(directory) / 'policy-bundle.tar'
         frozen.write_bytes(bundle)
-        verify_local_attestation(frozen, policy_commit=policy_commit, signer_commit=signer_commit)
+        verify_local_attestation(frozen, policy_commit=policy_commit, signer_commit=signer_commit,
+                                 run_id=run_id, run_attempt=run_attempt)
         _publish_verified(frozen, policy_commit)
 
 def main() -> None:

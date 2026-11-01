@@ -81,9 +81,13 @@ def verify_release(asset: str | os.PathLike[str], *, policy_commit: str, signer_
     return tag
 
 
-def verify_local_attestation(asset: str | os.PathLike[str], *, policy_commit: str, signer_commit: str, check_version: bool = True) -> None:
+def verify_local_attestation(asset: str | os.PathLike[str], *, policy_commit: str, signer_commit: str,
+                             check_version: bool = True, run_id: int | None = None, run_attempt: int | None = None) -> None:
     if not SHA.fullmatch(policy_commit) or not SHA.fullmatch(signer_commit):
         raise ValueError('policy and signer commits must be full SHAs')
+    if (run_id is None) != (run_attempt is None) or (run_id is not None and
+            (type(run_id) is not int or run_id < 1 or type(run_attempt) is not int or run_attempt < 1)):
+        raise ValueError('invalid trusted run identity')
     if check_version:
         ensure_gh_version()
 
@@ -97,10 +101,18 @@ def verify_local_attestation(asset: str | os.PathLike[str], *, policy_commit: st
                              '--predicate-type', 'https://slsa.dev/provenance/v1', '--format', 'json'))
     if not isinstance(verified, list) or not verified:
         raise ValueError('no verified policy attestations')
+    matching_run = run_id is None
     for item in verified:
         try:
-            repo_id = item['verificationResult']['signature']['certificate']['sourceRepositoryIdentifier']
+            certificate = item['verificationResult']['signature']['certificate']
+            repo_id = certificate['sourceRepositoryIdentifier']
         except (KeyError, TypeError) as error:
             raise ValueError('verified certificate lacks repository identity') from error
         if repo_id != REPOSITORY_ID:
             raise ValueError('verified certificate has the wrong repository identity')
+        if run_id is not None and (certificate.get('runInvocationURI') ==
+                f'https://github.com/{REPOSITORY}/actions/runs/{run_id}/attempts/{run_attempt}' and
+                certificate.get('buildTrigger') == 'push'):
+            matching_run = True
+    if not matching_run:
+        raise ValueError('verified certificate has the wrong qualification run identity')
