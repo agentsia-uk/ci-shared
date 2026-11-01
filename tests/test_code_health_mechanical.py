@@ -1,7 +1,9 @@
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -31,6 +33,41 @@ def project(status=None, state=None, **changes):
 
 
 class MechanicalProjectionTests(unittest.TestCase):
+    def test_cli_projects_the_head_scan_before_private_state_is_removed(self):
+        from code_health import cli
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            repo, output = root / 'repo', root / 'output'
+            repo.mkdir()
+            definition = {'schemaVersion': 1, 'policyRef': 'a' * 40, 'workflowRef': 'b' * 40, 'areas': [AREA]}
+            status, state = inputs()
+            scan_config = {'ignore': [], 'trust_plugins': False, 'hermes_enabled': False, 'exclude': []}
+            def snapshot(_repo, _sha, destination):
+                (destination / '.desloppify').mkdir(parents=True)
+                (destination / '.desloppify/config.json').write_text(json.dumps(scan_config))
+            argv = ['cli', '--repo', str(repo), '--base', COMMIT, '--head', COMMIT, '--output', str(output),
+                    '--repository', 'agentsia-uk/test', '--action-repository', 'agentsia-uk/ci-shared',
+                    '--action-ref', 'a' * 40, '--caller-ref', 'ref', '--caller-sha', 'b' * 40,
+                    '--scanner-image', 'image', '--reader-directory', str(root), '--projection-repository-id', '123']
+            with patch.object(sys, 'argv', argv), patch.dict(os.environ, {'GITHUB_EVENT_PATH': ''}), \
+                 patch.object(cli, 'version', return_value=cli.POLICY['desloppifyVersion']), \
+                 patch.object(cli, 'verify_scanner'), patch.object(cli, 'run', return_value=b'sample.py\0'), \
+                 patch.object(cli, 'git_blob', return_value=json.dumps(definition).encode()), \
+                 patch.object(cli, 'changed_paths', return_value=(set(), {})), \
+                 patch.object(cli, 'execution_provenance', return_value={}), \
+                 patch.object(cli, 'snapshot', side_effect=snapshot), \
+                 patch.object(cli, 'scan', return_value=(status, state)), \
+                 patch.object(cli, 'compare', return_value={'errors': [], 'objectiveAfter': 96, 'coverage': 'full'}), \
+                 patch('builtins.print'):
+                self.assertEqual(0, cli.main())
+            projected = json.loads((output / 'projections/app-python.json').read_bytes())
+            self.assertEqual(123, projected['repositoryId'])
+            self.assertEqual(COMMIT, projected['commitSha'])
+            self.assertEqual(96, projected['scores']['objective'])
+            self.assertNotIn(RAW_EVIDENCE, json.dumps(projected))
+            self.assertTrue((output / 'result.json').is_file())
+            self.assertFalse(any(output.rglob('state.json')))
+
     def test_native_scores_dimensions_counts_and_hotspots_keep_their_distinctions(self):
         status, state = inputs()
         before = copy.deepcopy((status, state))

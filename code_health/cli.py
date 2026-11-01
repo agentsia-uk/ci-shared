@@ -465,6 +465,7 @@ def main():
     parser.add_argument('--caller-sha', required=True)
     parser.add_argument('--scanner-image', required=True)
     parser.add_argument('--reader-directory', required=True, type=Path)
+    parser.add_argument('--projection-repository-id', type=int)
     args = parser.parse_args()
     require(re.fullmatch('[0-9a-f]{40}', args.base) and re.fullmatch('[0-9a-f]{40}', args.head), 'base and head must be full commit SHAs')
     require(version('desloppify') == POLICY['desloppifyVersion'], 'installed scanner version differs from the shared pin')
@@ -493,6 +494,11 @@ def main():
     output_metadata = args.output.stat()
     require(output_metadata.st_uid == os.geteuid() and not output_metadata.st_mode & 0o077,
             'result directory must be private and owned by the caller')
+    if args.projection_repository_id is not None:
+        require(0 < args.projection_repository_id <= 2 ** 53 - 1, 'invalid projection repository ID')
+        projection_directory = args.output / 'projections'
+        projection_directory.mkdir(mode=0o700)
+        from code_health.mechanical import project_mechanical
     results = []
     with tempfile.TemporaryDirectory(prefix='code-health-') as temporary:
         root = Path(temporary)
@@ -502,6 +508,14 @@ def main():
         for area in head['areas']:
             before = scan(root / 'base', area, root / 'scan-outputs' / area['id'] / 'base', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory) if area_has_source(base_files, area, head['areas']) else (None, None)
             after = scan(root / 'head', area, root / 'scan-outputs' / area['id'] / 'head', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory)
+            if args.projection_repository_id is not None:
+                scan_config = read_json(root / 'head' / area['path'] / '.desloppify/config.json')
+                projection = project_mechanical(*after, area, scan_config,
+                    repository_id=args.projection_repository_id, commit_sha=args.head,
+                    tool_version=POLICY['desloppifyVersion'], scanner_patch=POLICY['scannerPatch'])
+                with (projection_directory / (area['id'] + '.json')).open('x', encoding='utf-8') as output:
+                    json.dump(projection, output, ensure_ascii=False, separators=(',', ':'))
+                    output.write('\n')
             result = compare(*before, *after, touched, renames, area['language'], source_roots=(root / 'base', root / 'head'))
             results.append({'area': area['id'], **result})
     report = {
