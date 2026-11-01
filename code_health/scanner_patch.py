@@ -1,12 +1,12 @@
-"""Apply and verify the reviewed coverage corrections to the pinned scanner."""
+"""Apply and verify reviewed corrections to the pinned scanner."""
 import hashlib
 import importlib.util
 import os
 from pathlib import Path
 import tempfile
 
-PATCH_ID = 'coverage-and-python-graph-v3'
-PATCHED_SHA256 = '8e9385c2901a8c2ca6dc919a652a9a2b5c97c23d6c2c316beef98a752415c0d6'
+PATCH_ID = 'coverage-python-graph-and-nesting-v4'
+PATCHED_SHA256 = '4169b5f0443241ad75c1e6c2122bcc5773ee2b74517d1e410cc8240b600af7f1'
 COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_coverage',
                 'original': 'ab59a286ef8165fb8c812d894c1e1db6a6facca547a4a32e96eb20a5cfb3cd1f',
                 'patched': 'c3cc9f3d130093b6e9a289c67893e25fbcef44a3091bdd7bf081069dbee0d28f'},
@@ -16,6 +16,9 @@ COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_cov
  'python_graph': {'module': 'desloppify.languages.python.detectors.deps_resolution',
                   'original': '91381f7254ec7411068398f638349035337bbcd92d1f985c6d8f6c3fca00a1c4',
                   'patched': '36d7c99e42a62c7995316639027c663f8378201732b1f74cd76ca807629ab76e'},
+ 'python_complexity': {'module': 'desloppify.languages.python.detectors.complexity',
+                       'original': '6abf6611927dd26d1af8fe1832e9bdbc4a0cf1537a7fa2740ade65f597cda861',
+                       'patched': '78e5ce91d408515c627b5b09fe8105cf89140bff52a49ae80d0b9cedf2925d21'},
  'mapping': {'module': 'desloppify.engine.detectors.coverage.mapping_imports',
              'original': '625065243f813401187bb7c507753b328fe6f657c7f1faf995fcaafe224e015f',
              'patched': 'e89a7267a8e6e29072e8bc3b7655822a0efdcc8e9442921af2f87060c6b459fe'}}
@@ -95,6 +98,25 @@ PY_PARSER = '''def parse_test_import_specs(content: str) -> list[str]:
 
 '''
 
+PY_NESTING = '''def compute_nesting_depth(content: str, lines: list[str]) -> tuple[int, str] | None:
+    """Count Python indentation blocks, excluding continuation alignment."""
+    import io
+    import tokenize
+
+    depth = maximum = 0
+    for token in tokenize.generate_tokens(io.StringIO(content).readline):
+        if token.type == tokenize.INDENT:
+            depth += 1
+            maximum = max(maximum, depth)
+        elif token.type == tokenize.DEDENT:
+            depth -= 1
+    if maximum > 4:
+        return maximum, f"nesting depth {maximum}"
+    return None
+
+
+'''
+
 def component_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -120,6 +142,10 @@ def patched_component(component: str, original: bytes) -> bytes:
         if source.count(old) != 1:
             raise ValueError('scanner graph patch target is missing or ambiguous')
         source = source.replace(old, '    if import_names:\n', 1)
+    elif component == 'python_complexity':
+        start = source.index('def compute_nesting_depth(')
+        end = source.index('def compute_long_functions(', start)
+        source = source[:start] + PY_NESTING + source[end:]
     elif component == 'mapping':
         old = '        # Fallback: module-name lookup with progressively shorter prefixes.\n'
         new = '        if lang_name == "python" and spec.startswith("."):\n            continue\n' + old

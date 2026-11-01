@@ -168,7 +168,9 @@ def _scanner_mapping_fixture(policy):
     py = {'__name__': 'desloppify.languages.python.test_coverage'}
     mapper = {'__name__': 'desloppify.engine.detectors.coverage.mapping_imports'}
     graph = {'__name__': 'desloppify.languages.python.detectors.deps_resolution'}
-    for name, namespace in [('typescript', ts), ('python', py), ('mapping', mapper), ('python_graph', graph)]:
+    complexity = {'__name__': 'desloppify.languages.python.detectors.complexity'}
+    for name, namespace in [('typescript', ts), ('python', py), ('mapping', mapper), ('python_graph', graph),
+                            ('python_complexity', complexity)]:
         exec(compile(sources[name], '<candidate-scanner>', 'exec'), namespace)
     mapping = ts['map_test_to_source']
     parse, resolve = py['parse_test_import_specs'], py['resolve_import_spec']
@@ -185,7 +187,12 @@ def _scanner_mapping_fixture(policy):
         imported.touch()
         namespace_import = graph['resolve_python_from_import']('sample', 'dependency', str(importer), root)
         namespace_resolved = namespace_import == [str(imported.resolve())]
+    shallow = 'def f():\n    if True:\n        return (1 +\n             2 +\n' + ' ' * 47 + '3)\n'
+    deep = 'def f():\n    if True:\n        if True:\n            if True:\n                if True:\n                    pass\n'
+    nesting = complexity['compute_nesting_depth']
     return {'namespaceImport': namespace_resolved, 'patchSha256': hashlib.sha256(identity).hexdigest(),
+            'shallowNesting': nesting(shallow, shallow.splitlines()),
+            'deepNesting': nesting(deep, deep.splitlines()),
             'exact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
             'ambiguousName': mapping('other/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
             'ambiguousExact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/db/health.tsx'}),

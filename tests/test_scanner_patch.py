@@ -15,6 +15,22 @@ def original_typescript():
 
 
 class ScannerPatchTests(unittest.TestCase):
+    def test_python_nesting_counts_blocks_not_continuation_alignment(self):
+        source = scanner_patch.scanner_source('python_complexity').read_bytes()
+        if hashlib.sha256(source).hexdigest() != scanner_patch.COMPONENTS['python_complexity']['patched']:
+            source = scanner_patch.patched_component('python_complexity', source)
+        namespace = {'__name__': 'desloppify.languages.python.detectors.complexity'}
+        exec(compile(source, '<patched scanner>', 'exec'), namespace)
+        nesting = namespace['compute_nesting_depth']
+        aligned = 'def f():\n    if True:\n        return (1 +\n             2 +\n' + ' ' * 47 + '3)\n'
+        deep = 'def f():\n    if True:\n        if True:\n            if True:\n                if True:\n                    pass\n'
+        self.assertIsNone(nesting(aligned, aligned.splitlines()))
+        self.assertEqual((5, 'nesting depth 5'), nesting(deep, deep.splitlines()))
+        string = 'def f():\n    return """text\n' + ' ' * 47 + 'text\n"""\n'
+        self.assertIsNone(nesting(string, string.splitlines()))
+        tabs = 'def f():\n\tif True:\n\t\tif True:\n\t\t\tif True:\n\t\t\t\tif True:\n\t\t\t\t\tpass\n'
+        self.assertEqual((5, 'nesting depth 5'), nesting(tabs, tabs.splitlines()))
+
     def test_exact_paths_win_and_ambiguous_fallback_is_refused(self):
         corrected = scanner_patch.patched_component('typescript', original_typescript())
         namespace = {'__name__': 'desloppify.languages.typescript.test_coverage'}
