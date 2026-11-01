@@ -167,13 +167,14 @@ def _coverage(state, language) -> dict[str, object]:
     return {'status': native['status'], 'confidence': confidence, 'detectorSet': detectors, 'detectors': coverage_detectors, 'notes': notes}
 
 
-def project_mechanical(status, state, area, scan_config, *, commit_sha, tool_version, scanner_patch) -> dict[str, object]:
+def project_mechanical(status, state, area, scan_config, *, repository_id, commit_sha, tool_version, scanner_patch) -> dict[str, object]:
     """Use native values only; publication and subjective joins belong to m3."""
     status, state = _object(status, 'native status'), _object(state, 'native state')
     a.object_fields(area, {'id', 'language', 'path', 'exclusions'}, 'manifest area')
     a.cli.require(isinstance(area['id'], str) and re.fullmatch('[a-z][a-z0-9-]*', area['id']), 'invalid manifest area ID')
     a.cli.require(isinstance(area['language'], str) and area['language'] in a.cli.LANGUAGES, 'unsupported manifest language')
     a.cli.relative_path(area['path'])
+    a.positive_integer(repository_id, 'repository ID')
     a.sha(commit_sha, 'source commit')
     a.cli.require(state.get('version') == 3 and type(state['version']) is int, 'unsupported native state schema')
     a.cli.require(state.get('subjective_assessments') == {}, 'mechanical projection cannot assert unattributed subjective assessments')
@@ -209,8 +210,8 @@ def project_mechanical(status, state, area, scan_config, *, commit_sha, tool_ver
         directory = str(PurePosixPath(path).parent)
         directories['.' if directory == '.' else '/'.join(directory.split('/')[:3])] += 1
     a.cli.require(len(files) <= 10_000 and len(directories) <= 2_000, 'mechanical hotspot limit exceeded')
-    result = {'schemaVersion': 2, 'kind': 'agentsia.code-health.mechanical-projection', 'area': area['id'], 'commitSha': commit_sha, 'capturedAt': captured, 'desloppifyVersion': tool_version, 'scannerPatch': dict(scanner_patch), 'language': area['language'], 'scanPath': area['path'], 'scanCompleteness': completeness, 'excludes': excludes, 'scores': scores, 'subjectiveAssessment': 'absent', 'mechanicalDimensions': dimensions, 'counts': _counts(state, items), 'coverage': _coverage(state, area['language']), 'findings': sorted(findings, key=lambda finding: finding['id']), 'hotspots': {'files': _tally(files), 'directories': _tally(directories)}}
-    comparison = {'area': area['id'], 'desloppifyVersion': tool_version, 'scannerPatch': scanner_patch, 'language': area['language'],
+    result = {'schemaVersion': 2, 'kind': 'agentsia.code-health.mechanical-projection', 'repositoryId': repository_id, 'area': area['id'], 'commitSha': commit_sha, 'capturedAt': captured, 'desloppifyVersion': tool_version, 'scannerPatch': dict(scanner_patch), 'language': area['language'], 'scanPath': area['path'], 'scanCompleteness': completeness, 'excludes': excludes, 'scores': scores, 'subjectiveAssessment': 'absent', 'mechanicalDimensions': dimensions, 'counts': _counts(state, items), 'coverage': _coverage(state, area['language']), 'findings': sorted(findings, key=lambda finding: finding['id']), 'hotspots': {'files': _tally(files), 'directories': _tally(directories)}}
+    comparison = {'repositoryId': repository_id, 'area': area['id'], 'desloppifyVersion': tool_version, 'scannerPatch': scanner_patch, 'language': area['language'],
                   'scanPath': area['path'], 'scanCompleteness': completeness, 'excludes': sorted(excludes),
                   'coverage': result['coverage']}
     result['comparabilityKey'] = 'sha256:' + hashlib.sha256(json.dumps(comparison, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
@@ -227,13 +228,14 @@ def main() -> None:
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--area', required=True)
     parser.add_argument('--commit', required=True)
+    parser.add_argument('--repository-id', type=int, required=True)
     args = parser.parse_args()
     a.cli.require(version('desloppify') == a.cli.POLICY['desloppifyVersion'], 'installed scanner differs from the policy pin')
     read = lambda path, maximum: a.json_bytes(a.read_bounded(path, maximum), maximum)
     manifest = a.cli.validate_config(read(args.manifest, a.MAX_MANIFEST_BYTES))
     areas = [area for area in manifest['areas'] if area['id'] == args.area]
     a.cli.require(len(areas) == 1, 'projection area is not in the manifest')
-    result = project_mechanical(read(args.status, a.MAX_RESULT_BYTES), read(args.state, MAX_STATE_BYTES), areas[0], read(args.scan_config, a.MAX_MANIFEST_BYTES), commit_sha=args.commit, tool_version=a.cli.POLICY['desloppifyVersion'], scanner_patch=a.cli.POLICY.get('scannerPatch'))
+    result = project_mechanical(read(args.status, a.MAX_RESULT_BYTES), read(args.state, MAX_STATE_BYTES), areas[0], read(args.scan_config, a.MAX_MANIFEST_BYTES), repository_id=args.repository_id, commit_sha=args.commit, tool_version=a.cli.POLICY['desloppifyVersion'], scanner_patch=a.cli.POLICY.get('scannerPatch'))
     with args.output.open('x', encoding='utf-8') as output:
         output.write(json.dumps(result, ensure_ascii=False, separators=(',', ':')) + '\n')
 

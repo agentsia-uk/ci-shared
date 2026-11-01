@@ -90,7 +90,7 @@ class ScannerContainerTests(unittest.TestCase):
             actual_config = json.loads((source / '.desloppify/config.json').read_text())
             self.assertIn(evidence, json.dumps(state))
             projection = mechanical.project_mechanical(status, state, area, actual_config,
-                commit_sha='a' * 40, tool_version=POLICY['desloppifyVersion'], scanner_patch=POLICY['scannerPatch'])
+                repository_id=123, commit_sha='a' * 40, tool_version=POLICY['desloppifyVersion'], scanner_patch=POLICY['scannerPatch'])
             self.assertEqual(status['objective_score'], projection['scores']['objective'])
             self.assertEqual(status['strict_score'], projection['scores']['strict'])
             self.assertEqual(POLICY['scannerPatch'], projection['scannerPatch'])

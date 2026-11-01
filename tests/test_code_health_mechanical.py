@@ -27,7 +27,7 @@ def inputs():
 
 def project(status=None, state=None, **changes):
     defaults = inputs()
-    return m.project_mechanical(status if status is not None else defaults[0], state if state is not None else defaults[1], changes.pop('area', AREA), changes.pop('scan_config', SCAN_CONFIG), commit_sha=changes.pop('commit_sha', COMMIT), tool_version=changes.pop('tool_version', '1.0'), scanner_patch=changes.pop('scanner_patch', m.a.cli.POLICY['scannerPatch']), **changes)
+    return m.project_mechanical(status if status is not None else defaults[0], state if state is not None else defaults[1], changes.pop('area', AREA), changes.pop('scan_config', SCAN_CONFIG), repository_id=changes.pop('repository_id', 123), commit_sha=changes.pop('commit_sha', COMMIT), tool_version=changes.pop('tool_version', '1.0'), scanner_patch=changes.pop('scanner_patch', m.a.cli.POLICY['scannerPatch']), **changes)
 
 
 class MechanicalProjectionTests(unittest.TestCase):
@@ -164,6 +164,10 @@ class MechanicalProjectionTests(unittest.TestCase):
 
     def test_comparison_changes_when_scanner_or_coverage_changes(self):
         baseline = project()
+        self.assertNotEqual(baseline['comparabilityKey'], project(repository_id=124)['comparabilityKey'])
+        for invalid in [True, 0, -1, '123']:
+            with self.subTest(repository=invalid), self.assertRaises(ValueError):
+                project(repository_id=invalid)
         other_patch = {'id': 'corrected-scanner-v2', 'sha256': 'b' * 64}
         with patch.dict(m.a.cli.POLICY, {'scannerPatch': other_patch}):
             changed = project(scanner_patch=other_patch)
@@ -191,7 +195,7 @@ class MechanicalProjectionTests(unittest.TestCase):
             for name, value in [('status', status), ('state', state), ('manifest', manifest), ('config', SCAN_CONFIG)]:
                 (root / (name + '.json')).write_text(json.dumps(value))
             output = root / 'mechanical.json'
-            argv = ['mechanical', '--status', str(root / 'status.json'), '--state', str(root / 'state.json'), '--manifest', str(root / 'manifest.json'), '--scan-config', str(root / 'config.json'), '--area', AREA['id'], '--commit', COMMIT, '--output', str(output)]
+            argv = ['mechanical', '--status', str(root / 'status.json'), '--state', str(root / 'state.json'), '--manifest', str(root / 'manifest.json'), '--scan-config', str(root / 'config.json'), '--area', AREA['id'], '--commit', COMMIT, '--repository-id', '123', '--output', str(output)]
             with patch.object(m.a.cli.sys, 'argv', argv):
                 m.main()
                 self.assertEqual('absent', json.loads(output.read_text())['subjectiveAssessment'])
