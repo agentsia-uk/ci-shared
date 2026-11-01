@@ -11,12 +11,35 @@ import tempfile
 import threading
 import time
 
-from .qualification_container import DOCKER, ENVIRONMENT, _require_seccomp
+from .qualification_container import DOCKER, ENVIRONMENT, _require_seccomp, docker_environment
 from . import scanner_recovery
 
 IMAGE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 CONTAINER = re.compile(r'[0-9a-f]{64}\Z')
 MAX_LOG_BYTES = 64 * 1024 * 1024
+CONTAINER_USER = '10001:10001'
+
+
+def _make_readable(root):
+    for _, directories, files, directory_fd in os.fwalk(root, follow_symlinks=False):
+        metadata = os.fstat(directory_fd)
+        if metadata.st_uid != os.geteuid():
+            raise ValueError('scanner input directory has an unexpected owner')
+        os.fchmod(directory_fd, stat.S_IMODE(metadata.st_mode) | 0o555)
+        for name in files:
+            metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+                raise ValueError('scanner input contains an unsafe file')
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+            try:
+                opened = os.fstat(fd)
+                if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+                    raise ValueError('scanner input changed while preparing it')
+                os.fchmod(fd, stat.S_IMODE(opened.st_mode) | 0o444)
+            finally:
+                os.close(fd)
 
 
 def _container_id(path):
@@ -90,7 +113,7 @@ def _validate_inspection(record, image, mounts):
         host = record['HostConfig']
         actual = {(item['Source'], item['Destination'], item['RW']) for item in record['Mounts']}
         expected = {(str(source), target, mode != 'readonly') for source, target, mode in mounts}
-        if (record['Image'] != image or record['Config']['User'] != f'{os.getuid()}:{os.getgid()}'
+        if (record['Image'] != image or record['Config']['User'] != CONTAINER_USER
                 or host['NetworkMode'] != 'none' or host['ReadonlyRootfs'] is not True
                 or host['Privileged'] is not False or host['AutoRemove'] is not True or host['IpcMode'] != 'none'
                 or host['CapDrop'] != ['ALL'] or 'no-new-privileges' not in host['SecurityOpt']
@@ -130,18 +153,22 @@ def run_scanner(*, image, source, readers, output, arguments):
         if path.resolve(strict=True) != path or ',' in str(path):
             raise ValueError('scanner directory must be a direct path')
         metadata = path.stat()
-        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
-            raise ValueError('scanner directories must be private and owned by the caller')
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise ValueError('scanner directories must be owned by the caller')
         paths.append(path)
     if any(a == b or a in b.parents or b in a.parents for i, a in enumerate(paths) for b in paths[i + 1:]):
         raise ValueError('scanner directories must not overlap')
     labels = scanner_recovery.labels(paths)
-    _require_seccomp()
+    _make_readable(paths[0])
+    _make_readable(paths[1])
+    os.chmod(paths[2], 0o777)
+    env = docker_environment()
+    _require_seccomp(env)
     mounts = [(paths[0], '/source', 'readonly'), (paths[1], '/opt/code-health/readers', 'readonly'),
               (paths[2], '/output', '')]
     command = [DOCKER, 'create', '--rm', '--pull', 'never', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
                '--security-opt', 'no-new-privileges', '--security-opt', 'seccomp=builtin', '--pids-limit', '256',
-               '--memory', '8g', '--memory-swap', '8g', '--cpus', '4', '--user', f'{os.getuid()}:{os.getgid()}',
+               '--memory', '8g', '--memory-swap', '8g', '--cpus', '4', '--user', CONTAINER_USER,
                '--ipc', 'none', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=4g',
                '-e', 'HOME=/tmp', '-e', 'DESLOPPIFY_ROOT=/source', '-e', 'CI=true', '-e', 'NO_COLOR=1',
                '-e', 'npm_config_yes=false']
@@ -149,7 +176,6 @@ def run_scanner(*, image, source, readers, output, arguments):
         command.extend(['--label', key + '=' + value])
     for host, target, mode in mounts:
         command.extend(['--mount', f'type=bind,src={host},dst={target}' + (',' + mode if mode else '')])
-    env = ENVIRONMENT
     previous = signal.getsignal(signal.SIGTERM)
     def interrupted(_signum, _frame):
         raise InterruptedError('scanner cancelled')

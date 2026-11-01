@@ -22,6 +22,7 @@ class ScannerEntrypointTests(unittest.TestCase):
         with patch.object(scanner_entrypoint.sys, 'platform', 'linux'), \
                 patch.object(scanner_entrypoint.scanner_patch, 'verify') as verify, \
                 patch.object(scanner_entrypoint.ctypes, 'CDLL') as runtime, \
+                patch.object(scanner_entrypoint.os, 'umask') as umask, \
                 patch.object(scanner_entrypoint, 'required_grammars', return_value={'nim'}), \
                 patch.object(scanner_entrypoint.readers, 'configure') as configure, \
                 patch.object(scanner_entrypoint.readers, 'downloaded_languages', return_value=['nim']), \
@@ -32,6 +33,7 @@ class ScannerEntrypointTests(unittest.TestCase):
             runtime.assert_called_once_with('libstdc++.so.6', mode=scanner_entrypoint.ctypes.RTLD_GLOBAL)
             configure.assert_called_once_with(cache_dir=scanner_entrypoint.READER_DIR)
             parser.parse.assert_called_once_with(b'')
+            umask.assert_called_once_with(0)
             scanner.assert_called_once()
 
 

@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,37 @@ from code_health import scanner_container
 
 
 class ScannerContainerTests(unittest.TestCase):
+    def test_mount_permissions_preserve_executables_and_never_follow_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source'
+            source.mkdir(mode=0o700)
+            executable = source / 'tool'
+            executable.write_text('sample')
+            executable.chmod(0o700)
+            outside = root / 'outside'
+            outside.write_text('keep')
+            outside.chmod(0o600)
+            (source / 'link').symlink_to(outside)
+            scanner_container._make_readable(source)
+            self.assertEqual(0o755, source.stat().st_mode & 0o777)
+            self.assertEqual(0o744, executable.stat().st_mode & 0o777)
+            self.assertEqual(0o600, outside.stat().st_mode & 0o777)
+
+    def test_only_the_caller_owned_rootless_docker_socket_is_accepted(self):
+        from types import SimpleNamespace
+        from code_health.qualification_container import docker_environment
+        with patch.dict(os.environ, {'DOCKER_HOST': 'tcp://example.invalid:2375'}):
+            with self.assertRaisesRegex(ValueError, 'rootless socket'):
+                docker_environment()
+        expected = f'unix:///run/user/{os.getuid()}/docker.sock'
+        socket = SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660, st_uid=os.getuid())
+        with patch.dict(os.environ, {'DOCKER_HOST': expected, 'GH_TOKEN': 'private'}), \
+                patch('code_health.qualification_container.os.stat', return_value=socket):
+            env = docker_environment()
+        self.assertEqual(expected, env['DOCKER_HOST'])
+        self.assertNotIn('GH_TOKEN', env)
+
     def test_automatic_removal_is_confirmed_before_accepting_a_missing_container(self):
         failed = subprocess.CompletedProcess([], 1)
         absent = subprocess.CompletedProcess([], 0, stdout=b'')
@@ -32,7 +64,7 @@ class ScannerContainerTests(unittest.TestCase):
         image = 'sha256:' + 'b' * 64
         mounts = [(Path('/source'), '/source', 'readonly'), (Path('/readers'), '/readers', 'readonly'),
                   (Path('/output'), '/output', '')]
-        record = {'Id': 'a' * 64, 'Image': image, 'Config': {'User': f'{os.getuid()}:{os.getgid()}'},
+        record = {'Id': 'a' * 64, 'Image': image, 'Config': {'User': scanner_container.CONTAINER_USER},
                   'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False, 'AutoRemove': True,
                                  'IpcMode': 'none', 'CapDrop': ['ALL'],
                                  'SecurityOpt': ['no-new-privileges', 'seccomp=builtin']},

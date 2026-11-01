@@ -13,11 +13,12 @@ BOOT = '12345678-1234-1234-1234-123456789abc'
 
 def container(task, identity, pid, ident):
     tags = {scanner_recovery.PREFIX + key: value for key, value in {
-        'task': str(task), 'identity': identity, 'boot': BOOT, 'namespace': '1:2', 'pid': str(pid), 'start': '99'}.items()}
+        'task': str(task), 'identity': identity, 'boot': BOOT, 'namespace': '1:2',
+        'uid': str(os.getuid()), 'gid': str(os.getgid()), 'pid': str(pid), 'start': '99'}.items()}
     mounts = [{'Source': str(task / name), 'Destination': target, 'RW': writable} for name, target, writable in
               [('source', '/source', False), ('readers', '/opt/code-health/readers', False), ('output', '/output', True)]]
     return {'Id': ident, 'Image': 'sha256:' + 'b' * 64,
-            'Config': {'Labels': tags, 'User': f'{os.getuid()}:{os.getgid()}'}, 'Mounts': mounts}
+            'Config': {'Labels': tags, 'User': scanner_container.CONTAINER_USER}, 'Mounts': mounts}
 
 
 class ScannerRecoveryTests(unittest.TestCase):
@@ -76,8 +77,10 @@ class ScannerRecoveryTests(unittest.TestCase):
             info = task.stat()
             env = {'RUNNER_TEMP': str(parent), 'CODE_HEALTH_TASK_DIR': str(task),
                    'CODE_HEALTH_TASK_ID': f'{info.st_dev}:{info.st_ino}'}
-            with patch.dict(os.environ, env), self.assertRaisesRegex(ValueError, 'managed task'):
-                scanner_recovery.labels([parent])
+            with patch.dict(os.environ, env):
+                for path in (parent, task):
+                    with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'managed task'):
+                        scanner_recovery.labels([path])
 
     def test_different_process_namespace_is_treated_as_uncertain(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -32,10 +32,10 @@ class ScannerContainerTests(unittest.TestCase):
                     info = task.stat()
                     labels = {'task': str(task), 'identity': f'{info.st_dev}:{info.st_ino}',
                               'boot': scanner_recovery._boot(), 'namespace': scanner_recovery._namespace(),
-                              'pid': str(os.getpid()), 'start': start}
+                              'uid': str(os.getuid()), 'gid': str(os.getgid()), 'pid': str(os.getpid()), 'start': start}
                     command = ['docker', 'create', '--rm', '--pull', 'never', '--network', 'none', '--read-only',
                                '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-                               '--security-opt', 'seccomp=builtin', '--ipc', 'none', '--user', f'{os.getuid()}:{os.getgid()}']
+                               '--security-opt', 'seccomp=builtin', '--ipc', 'none', '--user', '10001:10001']
                     for key, value in labels.items():
                         command.extend(['--label', scanner_recovery.PREFIX + key + '=' + value])
                     for name, target, mode in [('source', '/source', ',readonly'),

@@ -1,5 +1,6 @@
 """Start the scanner inside a caller-verified, network-disabled container."""
 import ctypes
+import os
 import sys
 
 import tree_sitter_language_pack as readers
@@ -21,6 +22,8 @@ def main():
         raise ValueError('verified scanner readers are missing')
     for language in sorted(required):
         readers.get_parser(language).parse(b'')
+    # The private task parent protects output; permissive modes permit rootless-host cleanup.
+    os.umask(0)
     from desloppify.cli import main as scanner_main
     return scanner_main()
 

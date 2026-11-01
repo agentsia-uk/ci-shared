@@ -61,22 +61,25 @@ def labels(paths):
     parent, task, identity = (os.environ.get(key, '') for key in
                               ('RUNNER_TEMP', 'CODE_HEALTH_TASK_DIR', 'CODE_HEALTH_TASK_ID'))
     task = _task(parent, task, identity)
-    if any(not path.is_relative_to(task) for path in paths):
+    if any(path == task or not path.is_relative_to(task) for path in paths):
         raise ValueError('scanner inputs must belong to the managed task')
     start = _start(os.getpid())
     if start is None:
         raise ValueError('scanner owner identity is unavailable')
     return {PREFIX + 'task': str(task), PREFIX + 'identity': identity,
             PREFIX + 'boot': _boot(), PREFIX + 'namespace': _namespace(),
+            PREFIX + 'uid': str(os.getuid()), PREFIX + 'gid': str(os.getgid()),
             PREFIX + 'pid': str(os.getpid()), PREFIX + 'start': start}
 
 
 def sweep(parent):
     """Recover only containers whose exact owner is no longer alive."""
     from .scanner_container import _present, _remove, _validate_inspection
+    from .qualification_container import docker_environment
     parent = Path(parent).resolve(strict=True)
+    env = docker_environment()
     listing = subprocess.run([DOCKER, 'ps', '--all', '--no-trunc', '--filter', 'label=' + PREFIX + 'task',
-                              '--format', '{{.ID}}'], env=ENVIRONMENT, stdout=subprocess.PIPE,
+                              '--format', '{{.ID}}'], env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
     if len(listing) > 128 * 1024:
         raise ValueError('scanner container inventory exceeds its limit')
@@ -86,10 +89,10 @@ def sweep(parent):
         container = raw.decode('ascii')
         if not SHA.fullmatch(container):
             raise ValueError('invalid scanner container inventory')
-        inspected = subprocess.run([DOCKER, 'inspect', '--format', '{{json .}}', container], env=ENVIRONMENT,
+        inspected = subprocess.run([DOCKER, 'inspect', '--format', '{{json .}}', container], env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
         if inspected.returncode:
-            if not _present(container, ENVIRONMENT):
+            if not _present(container, env):
                 continue
             raise ValueError('scanner container could not be inspected')
         data = inspected.stdout
@@ -98,18 +101,18 @@ def sweep(parent):
         record = json.loads(data)
         if record.get('Id') != container:
             raise ValueError('scanner container identity differs from inventory')
-        if record['Config']['User'] != f'{os.getuid()}:{os.getgid()}':
-            continue
         tags = record['Config']['Labels']
         if not isinstance(tags, dict):
             continue
-        values = [tags.get(PREFIX + key) for key in ('task', 'identity', 'boot', 'namespace', 'pid', 'start')]
+        values = [tags.get(PREFIX + key) for key in ('task', 'identity', 'boot', 'namespace', 'uid', 'gid', 'pid', 'start')]
         if any(not isinstance(value, str) for value in values):
             candidate = tags.get(PREFIX + 'task')
             if isinstance(candidate, str) and Path(candidate).absolute().parent == parent:
                 protected.add(Path(candidate).absolute())
             continue
-        task_text, identity, boot, namespace, pid, start = values
+        task_text, identity, boot, namespace, uid, gid, pid, start = values
+        if uid != str(os.getuid()) or gid != str(os.getgid()):
+            continue
         if (not BOOT.fullmatch(boot) or not IDENTITY.fullmatch(namespace) or not pid.isascii()
                 or not pid.isdecimal() or len(pid) > 10 or int(pid) < 1
                 or not start.isascii() or not start.isdecimal() or len(start) > 20):
@@ -129,7 +132,7 @@ def sweep(parent):
         mounts = []
         for item in record['Mounts']:
             source = Path(item['Source'])
-            if not source.is_absolute() or source.resolve() != source or not source.is_relative_to(task):
+            if not source.is_absolute() or source.resolve() != source or source == task or not source.is_relative_to(task):
                 raise ValueError('scanner container mount is outside its task')
             mounts.append((source, item['Destination'], '' if item['RW'] else 'readonly'))
         if {(target, mode) for _, target, mode in mounts} != {
@@ -143,7 +146,7 @@ def sweep(parent):
             protected.add(task)
             continue
         for container, _, _ in containers:
-            _remove(container, ENVIRONMENT)
+            _remove(container, env)
         if all(allowed for _, _, allowed in containers):
             cleanup(parent, task, identity)
     return protected

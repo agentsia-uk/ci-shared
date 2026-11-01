@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import time
 
@@ -21,8 +22,22 @@ CONTAINER_ID = re.compile(r'[0-9a-f]{64}\Z')
 ENVIRONMENT = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'DOCKER_CONFIG': '/nonexistent'}
 
 
-def _require_seccomp():
-    result = subprocess.run([DOCKER, 'info', '--format', '{{json .SecurityOptions}}'], env=ENVIRONMENT,
+def docker_environment():
+    env = dict(ENVIRONMENT)
+    host = os.environ.get('DOCKER_HOST')
+    if host:
+        expected = f'unix:///run/user/{os.getuid()}/docker.sock'
+        if host != expected:
+            raise ValueError('Docker must use the caller-owned rootless socket')
+        metadata = os.stat(f'/run/user/{os.getuid()}/docker.sock', follow_symlinks=False)
+        if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid():
+            raise ValueError('rootless Docker socket identity differs')
+        env['DOCKER_HOST'] = host
+    return env
+
+
+def _require_seccomp(env=ENVIRONMENT):
+    result = subprocess.run([DOCKER, 'info', '--format', '{{json .SecurityOptions}}'], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
     if len(result) > 4096:
         raise ValueError('invalid Docker security options')
