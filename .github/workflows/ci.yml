@@ -71,20 +71,29 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: be58c90eae8065bb5c4d59e124518e3636ca08c6
           persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: candidate-source
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
       - name: Test the isolated candidate and its independent controller
         run: |
+          test "$(git rev-parse HEAD)" = be58c90eae8065bb5c4d59e124518e3636ca08c6
           tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-qualifier.XXXXXXXX")
           python -I -m venv "$tool_dir"
           "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
           "$tool_dir/bin/python" -I code_health/scanner_patch.py
-          DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-qualification-test:local .
+          mkdir -p "$tool_dir/context/code_health"
+          cp code_health/requirements.lock code_health/scanner_patch.py code_health/readers_lock.py code_health/scanner_entrypoint.py "$tool_dir/context/code_health/"
+          DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-qualification-test:local "$tool_dir/context"
           test_image=$(docker image inspect --format '{{.Id}}' code-health-qualification-test:local)
           unset PYTHONPATH PYTHONHOME
-          QUALIFICATION_TEST_IMAGE="$test_image" "$tool_dir/bin/python" -m unittest tests.test_qualification_container_integration -v
+          QUALIFICATION_CANDIDATE_REPO="$GITHUB_WORKSPACE/candidate-source" QUALIFICATION_TEST_IMAGE="$test_image" "$tool_dir/bin/python" -m unittest tests.test_qualification_container_integration -v
 
   reader-arm64-integration:
     name: Reader integration (Linux ARM64)
