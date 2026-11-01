@@ -51,8 +51,9 @@ class QualificationControllerTests(unittest.TestCase):
                 raise ValueError('unrelated failure')
         request = {'schemaVersion': 1, 'caseId': 'git-snapshot-escape',
                    'operation': 'git-snapshot', 'arguments': {'escape': True}}
-        with self.assertRaisesRegex(ValueError, 'unrelated failure'):
-            qualification_bridge.observe(request, BrokenSnapshot())
+        observation = qualification_bridge.observe(request, BrokenSnapshot())
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            evaluate_observation(observation, 'git-snapshot-escape', 'rejected')
 
     def test_scanner_security_requires_finding_and_full_coverage(self):
         expected = next(case[3] for case in qualification_cases() if case[0] == 'scanner-security')
@@ -71,8 +72,16 @@ class QualificationControllerTests(unittest.TestCase):
                 raise ValueError('unrelated failure')
         request = {'schemaVersion': 1, 'caseId': 'workflow-mutable',
                    'operation': 'workflow-pin', 'arguments': {'mode': 'mutable'}}
-        with self.assertRaisesRegex(ValueError, 'unrelated failure'):
-            qualification_bridge.observe(request, BrokenWorkflow())
+        observation = qualification_bridge.observe(request, BrokenWorkflow())
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            evaluate_observation(observation, 'workflow-mutable', 'rejected')
+
+    def test_unrelated_rejections_do_not_satisfy_any_negative_case(self):
+        for case_id, _, _, expected in qualification_cases():
+            if expected == 'rejected':
+                observation = {'schemaVersion': 1, 'caseId': case_id, 'outcome': 'rejected', 'value': 'unrelated failure'}
+                with self.subTest(case_id=case_id), self.assertRaisesRegex(ValueError, 'disagrees'):
+                    evaluate_observation(observation, case_id, expected)
 
 
 if __name__ == '__main__':

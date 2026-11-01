@@ -7,6 +7,24 @@ import copy
 
 from .qualification_container import run_candidate
 
+REJECTION_REASONS = {
+    'config-traversal': 'path escapes the repository',
+    'config-lower-target': 'strict target may only tighten the shared policy',
+    'config-mutable-pin': 'policyRef must be an immutable 40-character SHA',
+    'config-unknown-field': 'unknown code-health config field',
+    'config-duplicate-area': 'duplicate area id',
+    'config-exclude-all': 'an exclusion cannot hide the whole area',
+    'transition-unauthorised': 'policy changes require a dedicated authorized upgrade PR',
+    'transition-narrowed-area': 'existing scan areas and exclusions cannot change in an ordinary PR',
+    'language-uncovered': 'supported source file is outside declared language areas: src/a.ts',
+    'invalid-score': 'missing or invalid objective score',
+    'invalid-coverage': 'detector coverage changed between scans; scores are not comparable',
+    'git-snapshot-escape': 'symlink escapes',
+    'workflow-mutable': 'does not match workflowRef',
+    'workflow-conditional': 'may not be conditional or advisory',
+    'workflow-filtered': 'may not filter PR or merge-group events',
+}
+
 
 def _config():
     return {'schemaVersion': 1, 'policyRef': 'a' * 40, 'workflowRef': 'b' * 40,
@@ -103,7 +121,12 @@ def evaluate_observation(observation, expected_case, expected):
             observation['caseId'] != expected_case):
         raise ValueError('candidate observation is not bound to the expected case')
     if isinstance(expected, str) and expected in {'returned', 'rejected'}:
-        if observation.get('outcome') != expected or observation.get('value') is not None:
+        value = observation.get('value')
+        if (observation.get('outcome') != expected or
+                (expected == 'returned' and value is not None) or
+                (expected == 'rejected' and
+                 (expected_case not in REJECTION_REASONS or not isinstance(value, str) or
+                  REJECTION_REASONS[expected_case] not in value))):
             raise ValueError('candidate disagrees with the trusted qualification case')
         return
     value = observation.get('value')

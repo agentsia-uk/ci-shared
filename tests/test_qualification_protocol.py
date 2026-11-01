@@ -28,12 +28,12 @@ class CandidateObservationTests(unittest.TestCase):
             with self.subTest(data=data[:80]), self.assertRaises(ValueError):
                 decode_observation(data, expected_case='case')
 
-    def test_rejection_does_not_carry_candidate_payload(self):
-        for value in ({'passed': True}, 'reason'):
+    def test_rejection_carries_only_a_bounded_reason(self):
+        for value in ({'passed': True}, None, '', 'x' * 1025):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 decode_observation(json.dumps({'schemaVersion': 1, 'caseId': 'case', 'outcome': 'rejected',
                                                'value': value}).encode(), expected_case='case')
-        result = decode_observation(b'{"schemaVersion":1,"caseId":"case","outcome":"rejected","value":null}',
+        result = decode_observation(b'{"schemaVersion":1,"caseId":"case","outcome":"rejected","value":"reason"}',
                                     expected_case='case')
         self.assertEqual(result['outcome'], 'rejected')
 

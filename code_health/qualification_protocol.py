@@ -44,7 +44,8 @@ def decode_observation(data: bytes, *, expected_case: str) -> dict:
     if (not isinstance(value, dict) or set(value) != {'schemaVersion', 'caseId', 'outcome', 'value'} or
             type(value['schemaVersion']) is not int or value['schemaVersion'] != 1 or
             value['caseId'] != expected_case or value['outcome'] not in ('returned', 'rejected') or
-            (value['outcome'] == 'rejected' and value['value'] is not None)):
+            (value['outcome'] == 'rejected' and
+             (not isinstance(value['value'], str) or not 0 < len(value['value']) <= 1024))):
         raise ValueError('invalid candidate observation envelope')
     try:
         _reject_nonfinite(value['value'])

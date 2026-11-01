@@ -137,15 +137,7 @@ def observe(request, policy):
         else:
             raise RuntimeError('unknown qualification operation')
     except ValueError as error:
-        if operation == 'git-snapshot' and args.get('escape') is True and 'symlink escapes' not in str(error):
-            raise
-        expected_workflow_error = {'mutable': 'does not match workflowRef',
-                                   'conditional': 'may not be conditional or advisory',
-                                   'filtered': 'may not filter PR or merge-group events'}
-        if (operation == 'workflow-pin' and args.get('mode') in expected_workflow_error and
-                expected_workflow_error[args['mode']] not in str(error)):
-            raise
-        return {'schemaVersion': 1, 'caseId': request['caseId'], 'outcome': 'rejected', 'value': None}
+        return {'schemaVersion': 1, 'caseId': request['caseId'], 'outcome': 'rejected', 'value': str(error)}
     return {'schemaVersion': 1, 'caseId': request['caseId'], 'outcome': 'returned', 'value': value}
 
 
