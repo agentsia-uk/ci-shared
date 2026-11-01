@@ -7,10 +7,23 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from code_health.qualification_container import run_candidate
+from code_health.qualification_container import docker_capture, run_candidate
 
 
 class QualificationContainerTests(unittest.TestCase):
+    def test_docker_response_is_bounded_during_read_and_on_timeout(self):
+        env = {'PATH': os.defpath}
+        command = [sys.executable, '-c', 'import sys; sys.stdout.write("x" * 1000000); sys.stdout.flush()']
+        with self.assertRaisesRegex(ValueError, 'exceeds'):
+            docker_capture(command, env=env, limit=32, timeout=3)
+        command = [sys.executable, '-c', 'import time; time.sleep(5)']
+        with self.assertRaises(subprocess.TimeoutExpired):
+            docker_capture(command, env=env, limit=32, timeout=0.1)
+        command = [sys.executable, '-c', 'import sys; print("ok"); sys.exit(4)']
+        self.assertEqual(4, docker_capture(command, env=env, limit=32, check=False).returncode)
+        with self.assertRaises(subprocess.CalledProcessError):
+            docker_capture(command, env=env, limit=32)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -40,7 +53,8 @@ if sys.argv[1] == 'info':
     else:
         print(json.dumps(['name=seccomp,profile=builtin']))
 elif sys.argv[1] == 'create':
-    print('a' * 64)
+    Path(sys.argv[sys.argv.index('--cidfile') + 1]).write_text('a' * 64)
+    print('x' * 1000000 if mode == 'oversize-create' else 'a' * 64)
 elif sys.argv[1] == 'start':
     request = json.load(sys.stdin)
     if mode == 'timeout':
@@ -97,6 +111,12 @@ elif sys.argv[1] == 'rm' and mode == 'cleanup-fails':
         self.mode.write_text('cleanup-fails')
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_case()
+
+    def test_oversized_create_response_removes_recorded_container(self):
+        self.mode.write_text('oversize-create')
+        with self.assertRaisesRegex(ValueError, 'exceeds'):
+            self.run_case()
+        self.assertEqual(self.calls()[-1]['args'], ['rm', '--force', 'a' * 64])
 
     def test_missing_or_invalid_seccomp_support_refuses_creation(self):
         for mode in ('no-seccomp', 'invalid-info'):

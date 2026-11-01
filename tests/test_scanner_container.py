@@ -56,6 +56,7 @@ class ScannerContainerTests(unittest.TestCase):
                     patch.object(scanner_container, '_require_seccomp'), \
                     patch.object(scanner_container.scanner_recovery, 'labels', return_value={}), \
                     patch.object(scanner_container, '_inspect'), \
+                    patch.object(scanner_container, 'docker_capture', side_effect=docker), \
                     patch.object(scanner_container.subprocess, 'run', side_effect=docker), \
                     patch.object(scanner_container, '_capture', side_effect=lost_output):
                 self.assertEqual(scanner_container.run_scanner(image='sha256:' + 'b' * 64, source=source,
@@ -112,10 +113,12 @@ class ScannerContainerTests(unittest.TestCase):
     def test_automatic_removal_is_confirmed_before_accepting_a_missing_container(self):
         failed = subprocess.CompletedProcess([], 1)
         absent = subprocess.CompletedProcess([], 0, stdout=b'')
-        with patch.object(scanner_container.subprocess, 'run', side_effect=[failed, absent]):
+        with patch.object(scanner_container.subprocess, 'run', return_value=failed), \
+             patch.object(scanner_container, 'docker_capture', return_value=absent):
             scanner_container._remove('a' * 64, {})
         unavailable = subprocess.CalledProcessError(1, 'docker')
-        with patch.object(scanner_container.subprocess, 'run', side_effect=[failed, unavailable]):
+        with patch.object(scanner_container.subprocess, 'run', return_value=failed), \
+             patch.object(scanner_container, 'docker_capture', side_effect=unavailable):
             with self.assertRaises(subprocess.CalledProcessError):
                 scanner_container._remove('a' * 64, {})
 
@@ -136,7 +139,7 @@ class ScannerContainerTests(unittest.TestCase):
                   'Mounts': [{'Source': str(source), 'Destination': target, 'RW': mode != 'readonly'}
                              for source, target, mode in mounts]}
         response = subprocess.CompletedProcess([], 0, stdout=json.dumps(record).encode())
-        with patch.object(scanner_container.subprocess, 'run', return_value=response):
+        with patch.object(scanner_container, 'docker_capture', return_value=response):
             scanner_container._inspect('a' * 64, image, mounts, {})
             record['HostConfig']['NetworkMode'] = 'bridge'
             response.stdout = json.dumps(record).encode()
@@ -172,12 +175,33 @@ class ScannerContainerTests(unittest.TestCase):
                     patch.object(scanner_container, '_require_seccomp'), \
                     patch.object(scanner_container.scanner_recovery, 'labels', return_value={}), \
                     patch.object(scanner_container, '_inspect'), \
+                    patch.object(scanner_container, 'docker_capture', side_effect=docker), \
                     patch.object(scanner_container.subprocess, 'run', side_effect=docker) as run, \
                     patch.object(scanner_container, '_capture', side_effect=TimeoutError('timeout')):
                 with self.assertRaises(TimeoutError):
                     scanner_container.run_scanner(image='sha256:' + 'b' * 64, source=source, readers=readers,
                                                   output=output, arguments=[])
             self.assertEqual([scanner_container.DOCKER, 'rm', '--force', 'a' * 64], run.call_args_list[-1].args[0])
+
+    def test_oversized_create_response_removes_recorded_container(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source, readers, output = (root / name for name in ('source', 'readers', 'output'))
+            for path in (source, readers, output):
+                path.mkdir(mode=0o700)
+            def oversized(command, **_kwargs):
+                Path(command[command.index('--cidfile') + 1]).write_text('a' * 64)
+                raise ValueError('Docker response exceeds its size limit')
+            with patch.object(scanner_container.os, 'geteuid', return_value=root.stat().st_uid), \
+                    patch.object(scanner_container, '_require_seccomp'), \
+                    patch.object(scanner_container.scanner_recovery, 'labels', return_value={}), \
+                    patch.object(scanner_container, 'docker_capture', side_effect=oversized), \
+                    patch.object(scanner_container, '_remove') as remove:
+                with self.assertRaisesRegex(ValueError, 'exceeds'):
+                    scanner_container.run_scanner(image='sha256:' + 'b' * 64, source=source,
+                                                  readers=readers, output=output, arguments=[])
+            remove.assert_called_once()
+            self.assertEqual('a' * 64, remove.call_args.args[0])
 
     def test_termination_removes_the_created_container(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -194,6 +218,7 @@ class ScannerContainerTests(unittest.TestCase):
                     patch.object(scanner_container, '_require_seccomp'), \
                     patch.object(scanner_container.scanner_recovery, 'labels', return_value={}), \
                     patch.object(scanner_container, '_inspect'), \
+                    patch.object(scanner_container, 'docker_capture', side_effect=docker), \
                     patch.object(scanner_container.subprocess, 'run', side_effect=docker) as run, \
                     patch.object(scanner_container, '_capture', side_effect=lambda *_: os.kill(os.getpid(), signal.SIGTERM)):
                 with self.assertRaisesRegex(InterruptedError, 'cancelled'):

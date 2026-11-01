@@ -37,7 +37,7 @@ class ScannerRecoveryTests(unittest.TestCase):
             replies = [subprocess.CompletedProcess([], 0, stdout=(('a' * 64) + '\n' + ('c' * 64) + '\n').encode()),
                        subprocess.CompletedProcess([], 0, stdout=json.dumps(live_record).encode()),
                        subprocess.CompletedProcess([], 0, stdout=json.dumps(stale_record).encode())]
-            with patch.object(scanner_recovery.subprocess, 'run', side_effect=replies), \
+            with patch.object(scanner_recovery, 'docker_capture', side_effect=replies), \
                     patch.object(scanner_recovery, '_boot', return_value=BOOT), \
                     patch.object(scanner_recovery, '_namespace', return_value='1:2'), \
                     patch.object(scanner_recovery, '_start', side_effect=lambda pid: '99' if pid == 100 else '100'), \
@@ -58,7 +58,7 @@ class ScannerRecoveryTests(unittest.TestCase):
             record = container(task, '1:2', 101, 'c' * 64)
             replies = [subprocess.CompletedProcess([], 0, stdout=('c' * 64).encode()),
                        subprocess.CompletedProcess([], 0, stdout=json.dumps(record).encode())]
-            with patch.object(scanner_recovery.subprocess, 'run', side_effect=replies), \
+            with patch.object(scanner_recovery, 'docker_capture', side_effect=replies), \
                     patch.object(scanner_recovery, '_boot', return_value=BOOT), \
                     patch.object(scanner_recovery, '_namespace', return_value='1:2'), \
                     patch.object(scanner_recovery, '_start', return_value=None), \
@@ -91,7 +91,7 @@ class ScannerRecoveryTests(unittest.TestCase):
             record = container(task, f'{info.st_dev}:{info.st_ino}', 101, 'c' * 64)
             replies = [subprocess.CompletedProcess([], 0, stdout=('c' * 64).encode()),
                        subprocess.CompletedProcess([], 0, stdout=json.dumps(record).encode())]
-            with patch.object(scanner_recovery.subprocess, 'run', side_effect=replies), \
+            with patch.object(scanner_recovery, 'docker_capture', side_effect=replies), \
                     patch.object(scanner_recovery, '_boot', return_value=BOOT), \
                     patch.object(scanner_recovery, '_namespace', return_value='3:4'), \
                     patch.object(scanner_recovery, '_start') as start, \
