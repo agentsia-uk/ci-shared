@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from code_health import artifacts as a
+from code_health import mechanical as m
+from tests.test_code_health_mechanical import inputs as native_inputs
 
 REPOSITORY = {'id': 1259100960, 'fullName': 'agentsia-uk/ci-shared'}
 RUN = {'id': 40834508277, 'attempt': 1, 'event': 'push', 'ref': 'refs/heads/main'}
@@ -91,6 +93,130 @@ class ProducerTests(unittest.TestCase):
         envelope['registry']['repository']['id'] = True
         with self.assertRaisesRegex(ValueError, 'exact manifest projection'):
             a.validate_envelope(envelope)
+
+    def projection(self):
+        status, state = native_inputs()
+        scan_config = {'ignore': [], 'trust_plugins': False, 'hermes_enabled': False, 'exclude': []}
+        return m.project_mechanical(status, state, self.definition['areas'][0], scan_config,
+                                    repository_id=REPOSITORY['id'], commit_sha=self.commit,
+                                    tool_version='1.0', scanner_patch=a.cli.POLICY['scannerPatch'])
+
+    def build_v2(self, projections):
+        self.result['areas'][0].update(objectiveAfter=96, coverage='full')
+        self.result_path.write_text(json.dumps(self.result))
+        with patch.object(a, 'current_runtime', return_value=copy.deepcopy(LINUX)):
+            return a.build_envelope_v2(self.repo, self.commit, self.commit, self.result_path,
+                                       self.evidence_path, REPOSITORY, RUN, projections)
+
+    def test_v2_binds_exact_projection_bytes_and_manifest_inventory(self):
+        raw = json.dumps(self.projection()).encode()
+        envelope = self.build_v2({'project-python': raw})
+        self.assertEqual(2, envelope['schemaVersion'])
+        self.assertEqual([{'area': 'project-python', 'path': 'projections/project-python.json',
+                           'sha256': hashlib.sha256(raw).hexdigest(), 'size': len(raw)}], envelope['projections'])
+        self.assertEqual(envelope, a.validate_envelope(envelope))
+        for invalid in [{}, {'different': raw}, {'project-python': raw, 'extra': raw}]:
+            with self.subTest(inventory=list(invalid)), self.assertRaisesRegex(ValueError, 'inventory'):
+                self.build_v2(invalid)
+        for change in [lambda e: e['projections'][0].update(path='../x'),
+                       lambda e: e['projections'][0].update(size=True),
+                       lambda e: e['projections'].append(copy.deepcopy(e['projections'][0]))]:
+            altered = copy.deepcopy(envelope)
+            change(altered)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                a.validate_envelope(altered)
+
+    def test_v2_binds_each_nested_area_with_its_own_scope(self):
+        nested = {'id': 'nested-python', 'language': 'python', 'path': 'nested', 'exclusions': []}
+        self.definition['areas'].append(nested)
+        (self.repo / a.cli.CONFIG).write_text(json.dumps(self.definition))
+        self.git('add', a.cli.CONFIG)
+        self.git('commit', '-qm', 'nested area')
+        self.commit = self.git('rev-parse', 'HEAD')
+        self.result.update(base=self.commit, head=self.commit,
+                           configSha256=a.sha256(json.dumps(self.definition, sort_keys=True).encode()))
+        self.result['areas'].append({'area': nested['id'], 'objectiveAfter': 96, 'coverage': 'full'})
+        status, state = native_inputs()
+        base_config = {'ignore': [], 'trust_plugins': False, 'hermes_enabled': False, 'exclude': ['nested']}
+        root = m.project_mechanical(status, state, self.definition['areas'][0], base_config,
+                                    repository_id=REPOSITORY['id'], commit_sha=self.commit,
+                                    tool_version='1.0', scanner_patch=a.cli.POLICY['scannerPatch'])
+        state['scan_path'] = 'nested'
+        child = m.project_mechanical(status, state, nested, {**base_config, 'exclude': []},
+                                     repository_id=REPOSITORY['id'], commit_sha=self.commit,
+                                     tool_version='1.0', scanner_patch=a.cli.POLICY['scannerPatch'])
+        envelope = self.build_v2({'project-python': json.dumps(root).encode(), 'nested-python': json.dumps(child).encode()})
+        self.assertEqual(['nested-python', 'project-python'], [p['area'] for p in envelope['projections']])
+        root['excludes'] = []
+        root['comparabilityKey'] = m.comparison_key(root)
+        with self.assertRaisesRegex(ValueError, 'scope differs'):
+            self.build_v2({'project-python': json.dumps(root).encode(), 'nested-python': json.dumps(child).encode()})
+
+    def test_v2_rejects_mixed_identity_scope_and_scores_even_with_recomputed_key(self):
+        for change in [lambda p: p.update(repositoryId=1), lambda p: p.update(commitSha='e' * 40),
+                       lambda p: p.update(scannerPatch={'id': 'other', 'sha256': 'a' * 64}),
+                       lambda p: p.update(excludes=['*']), lambda p: p['coverage'].update(status='reduced'),
+                       lambda p: p['scores'].update(objective=95), lambda p: p.update(extra=True),
+                       lambda p: p.update(subjectiveAssessment='complete')]:
+            projection = self.projection()
+            change(projection)
+            projection['comparabilityKey'] = m.comparison_key(projection)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.build_v2({'project-python': json.dumps(projection).encode()})
+        projection = self.projection()
+        projection['findings'][0]['summary'] = 'PASS' + 'WORD=synthetic-value'
+        with self.assertRaisesRegex(ValueError, 'secret-bearing'):
+            self.build_v2({'project-python': json.dumps(projection).encode()})
+        for change in [lambda p: p['findings'][0].update(detail={'source': 'raw code'}),
+                       lambda p: p['coverage']['detectors'].append({'detector': 'security', 'status': 'full', 'confidence': True, 'details': {}}),
+                       lambda p: p['scores'].update(objective=96.01),
+                       lambda p: p.update(capturedAt='unknown')]:
+            projection = self.projection()
+            change(projection)
+            projection['comparabilityKey'] = m.comparison_key(projection)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.build_v2({'project-python': json.dumps(projection).encode()})
+
+    def test_projection_directory_rejects_links_extra_files_and_checkout_paths(self):
+        directory = self.root / 'projections'
+        directory.mkdir(mode=0o700)
+        file = directory / 'project-python.json'
+        file.write_bytes(json.dumps(self.projection()).encode())
+        self.assertEqual({'project-python': file.read_bytes()}, a.read_projection_directory(directory, self.repo))
+        alias = directory / 'other.json'
+        alias.hardlink_to(file)
+        with self.assertRaisesRegex(ValueError, 'unsafe projection'):
+            a.read_projection_directory(directory, self.repo)
+        alias.unlink()
+        file.unlink()
+        file.symlink_to(self.result_path)
+        with self.assertRaises(OSError):
+            a.read_projection_directory(directory, self.repo)
+        file.unlink()
+        (directory / 'unexpected.txt').write_text('x')
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            a.read_projection_directory(directory, self.repo)
+        with self.assertRaisesRegex(ValueError, 'outside the checkout'):
+            a.read_projection_directory(self.repo / '.github', self.repo)
+
+    def test_standalone_v2_binds_private_projection(self):
+        directory = self.root / 'projections'
+        directory.mkdir(mode=0o700)
+        raw = json.dumps(self.projection()).encode()
+        (directory / 'project-python.json').write_bytes(raw)
+        self.result['areas'][0].update(objectiveAfter=96, coverage='full')
+        self.result_path.write_text(json.dumps(self.result))
+        output = self.root / 'producer-v2.json'
+        argv = ['artifacts', '--repo', str(self.repo), '--base', self.commit, '--head', self.commit,
+                '--result', str(self.result_path), '--execution-evidence', str(self.evidence_path),
+                '--projection-dir', str(directory), '--output', str(output)]
+        env = {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY_ID': str(REPOSITORY['id']), 'GITHUB_REPOSITORY': REPOSITORY['fullName'],
+               'GITHUB_RUN_ID': str(RUN['id']), 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': RUN['ref']}
+        with patch.object(a.sys, 'argv', argv), patch.dict(a.os.environ, env), patch.object(a, 'current_runtime', return_value=LINUX):
+            a.main()
+        result = json.loads(output.read_bytes())
+        self.assertEqual(2, result['schemaVersion'])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), result['projections'][0]['sha256'])
 
     def test_result_must_match_exact_source_config_tool_and_area_set(self):
         for change in [{'head': 'e' * 40}, {'base': 'f' * 40}, {'configSha256': '0' * 64}, {'desloppifyVersion': '0.9'}, {'scannerPatch': None}, {'scannerPatch': {'id': 'different', 'sha256': 'a' * 64}}, {'areas': []}, {'areas': [{'area': 'project-python'}, {'area': 'project-python'}]}, {'areas': ['not-an-area']}, {'schemaVersion': True}]:

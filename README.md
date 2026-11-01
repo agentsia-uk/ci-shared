@@ -208,6 +208,21 @@ The draft action prepares the scanner container and verified readers; the
 reusable workflow still points to the earlier action and no qualified release
 has been activated.
 
+The draft mechanical projection records the repository ID, source commit,
+scanner correction, scan scope, detector coverage and native mechanical scores.
+Its comparison key includes the repository ID and those measurement conditions.
+The producer can bind one projection per manifest area in a version 2 evidence
+record using `--projection-dir`; each input must be a regular file named
+`<area>.json` in a private directory outside the caller checkout. The producer
+checks the projection's identity, scope, score and public fields against the
+scan result and records its exact byte hash and size. Version 1 evidence remains
+readable without projections.
+
+These checks establish consistency, not authenticity. The trusted workflow
+does not yet generate, attest or upload version 2 evidence, and the collector
+does not yet admit it. Do not publish a projection until the independent
+workflow, release and source verification has been completed.
+
 Run the verifier's tests with the pinned scanner installed:
 
 ```sh

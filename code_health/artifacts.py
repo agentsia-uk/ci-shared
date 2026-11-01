@@ -6,9 +6,10 @@ import copy
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
+import stat
 import sys
 
 if __package__:
@@ -20,6 +21,8 @@ MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 MAX_EXECUTION_BYTES = 64 * 1024
 MAX_ENVELOPE_BYTES = 4 * 1024 * 1024
+MAX_PROJECTION_BYTES = 8 * 1024 * 1024
+MAX_PROJECTIONS_BYTES = 64 * 1024 * 1024
 CANONICAL_REPOSITORY = 'agentsia-uk/ci-shared'
 ENVELOPE_FIELDS = {'schemaVersion', 'kind', 'collectorValidationRequired', 'repository', 'run', 'source', 'manifest', 'result', 'launcher', 'release', 'runtime', 'registry'}
 
@@ -123,8 +126,9 @@ def project_registry(repository, commit, manifest_raw) -> dict[str, object]:
 
 
 def validate_envelope(value) -> dict[str, object]:
-    object_fields(value, ENVELOPE_FIELDS, 'producer envelope')
-    cli.require(type(value['schemaVersion']) is int and value['schemaVersion'] == 1 and value['kind'] == 'agentsia.code-health.ci-producer', 'unsupported producer schema')
+    cli.require(isinstance(value, dict) and type(value.get('schemaVersion')) is int and value['schemaVersion'] in (1, 2), 'unsupported producer schema')
+    object_fields(value, ENVELOPE_FIELDS | ({'projections'} if value['schemaVersion'] == 2 else set()), 'producer envelope')
+    cli.require(value['kind'] == 'agentsia.code-health.ci-producer', 'unsupported producer schema')
     cli.require(value['collectorValidationRequired'] is True, 'producer evidence requires independent m3 admission')
     validate_repository(value['repository'])
     validate_run(value['run'])
@@ -153,6 +157,21 @@ def validate_envelope(value) -> dict[str, object]:
     object_fields(registry, {'repository', 'sourceCommitSha', 'manifestSha256', 'areas', 'unsupportedLanguages'}, 'registry')
     expected = {'repository': value['repository'], 'sourceCommitSha': value['source']['commitSha'], 'manifestSha256': manifest['sha256'], 'areas': manifest['definition']['areas'], 'unsupportedLanguages': manifest['definition'].get('unsupportedLanguages', [])}
     cli.require(json.dumps(registry, sort_keys=True, separators=(',', ':')) == json.dumps(expected, sort_keys=True, separators=(',', ':')), 'registry is not the exact manifest projection')
+    if value['schemaVersion'] == 2:
+        projections = value['projections']
+        areas = {area['id'] for area in manifest['definition']['areas']}
+        cli.require(isinstance(projections, list) and len(projections) == len(areas), 'projection inventory differs from manifest')
+        seen, total = set(), 0
+        for item in projections:
+            object_fields(item, {'area', 'path', 'sha256', 'size'}, 'projection reference')
+            area = item['area']
+            cli.require(isinstance(area, str) and area in areas and area not in seen and item['path'] == f'projections/{area}.json', 'invalid projection reference')
+            sha(item['sha256'], 'projection hash', 64)
+            positive_integer(item['size'], 'projection size')
+            cli.require(item['size'] <= MAX_PROJECTION_BYTES, 'projection exceeds its byte limit')
+            total += item['size']
+            seen.add(area)
+        cli.require(total <= MAX_PROJECTIONS_BYTES and seen == areas, 'projection inventory differs from manifest')
     return value
 
 
@@ -193,6 +212,111 @@ def build_envelope(repo, base, head, result_path, execution_path, repository, ru
     return value
 
 
+def build_envelope_v2(repo, base, head, result_path, execution_path, repository, run, projection_bytes) -> dict[str, object]:
+    """Bind projections as data; the caller and collector must authenticate their origin."""
+    if __package__:
+        from . import mechanical
+    else:
+        import mechanical
+    envelope = build_envelope(repo, base, head, result_path, execution_path, repository, run)
+    raw_result = read_bounded(result_path, MAX_RESULT_BYTES)
+    cli.require(sha256(raw_result) == envelope['result']['sha256'], 'result changed during projection binding')
+    result = json_bytes(raw_result, MAX_RESULT_BYTES)
+    areas = {area['id']: area for area in envelope['manifest']['definition']['areas']}
+    cli.require(isinstance(projection_bytes, dict) and set(projection_bytes) == set(areas), 'projection inventory differs from manifest')
+    results = {area['area']: area for area in result['areas']}
+    references, total = [], 0
+    for area_id, raw in sorted(projection_bytes.items()):
+        cli.require(isinstance(raw, bytes) and 0 < len(raw) <= MAX_PROJECTION_BYTES, 'invalid projection bytes')
+        total += len(raw)
+        cli.require(total <= MAX_PROJECTIONS_BYTES, 'projections exceed total byte limit')
+        projection = json_bytes(raw, MAX_PROJECTION_BYTES)
+        fields = {'schemaVersion', 'kind', 'repositoryId', 'area', 'commitSha', 'capturedAt', 'desloppifyVersion',
+                  'scannerPatch', 'language', 'scanPath', 'scanCompleteness', 'excludes', 'scores', 'subjectiveAssessment',
+                  'mechanicalDimensions', 'counts', 'coverage', 'findings', 'hotspots', 'comparabilityKey'}
+        object_fields(projection, fields, 'mechanical projection')
+        area = areas[area_id]
+        mechanical.validate_public_projection(projection)
+        try:
+            rendered = json.dumps(projection, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+        except (TypeError, ValueError, RecursionError) as error:
+            raise ValueError('invalid projection values') from error
+        cli.require(not mechanical._has_secret(rendered), 'secret-bearing projection is not publishable')
+        cli.require(type(projection['schemaVersion']) is int and projection['schemaVersion'] == 2 and
+                    projection['kind'] == 'agentsia.code-health.mechanical-projection' and
+                    type(projection['repositoryId']) is int and projection['repositoryId'] == repository['id'] and
+                    projection['area'] == area_id and projection['commitSha'] == head and
+                    projection['language'] == area['language'] and projection['scanPath'] == area['path'] and
+                    projection['desloppifyVersion'] == result['desloppifyVersion'] and
+                    projection['scannerPatch'] == result['scannerPatch'] and projection['subjectiveAssessment'] == 'absent',
+                    'projection identity differs from the scan')
+        root = PurePosixPath(area['path'])
+        expected_excludes = [item['pattern'] for item in area['exclusions']]
+        expected_excludes.extend(other['path'] for other in areas.values()
+                                 if PurePosixPath(other['path']) != root and PurePosixPath(other['path']).is_relative_to(root))
+        cli.require(isinstance(projection['excludes'], list) and all(isinstance(item, str) for item in projection['excludes']) and
+                    sorted(projection['excludes']) == sorted(expected_excludes) and
+                    projection['scanCompleteness'] in ('fast', 'full') and isinstance(projection['coverage'], dict) and
+                    projection['coverage'].get('status') == results[area_id].get('coverage'), 'projection scope differs from the scan')
+        object_fields(projection['scores'], {'overall', 'strict', 'objective', 'verified'}, 'projection scores')
+        for name, value in projection['scores'].items():
+            cli.require(value == mechanical._score(value, 'projection ' + name), 'projection score is not rounded')
+        cli.require(
+                    mechanical._score(projection['scores'].get('objective'), 'projection objective') ==
+                    mechanical._score(results[area_id].get('objectiveAfter'), 'result objective'), 'projection score differs from the scan')
+        mechanical._timestamp(projection['capturedAt'])
+        cli.require(projection['comparabilityKey'] == mechanical.comparison_key(projection), 'projection comparison key differs')
+        references.append({'area': area_id, 'path': f'projections/{area_id}.json', 'sha256': sha256(raw), 'size': len(raw)})
+    envelope['schemaVersion'] = 2
+    envelope['projections'] = references
+    validate_envelope(envelope)
+    cli.require(len(json.dumps(envelope).encode()) <= MAX_ENVELOPE_BYTES, 'producer envelope exceeds its byte limit')
+    return envelope
+
+
+def read_projection_directory(directory, repo) -> dict[str, bytes]:
+    """Read bounded regular files from a private task directory, never from the caller checkout."""
+    requested = directory.absolute()
+    cli.require(requested.resolve(strict=True) == requested and not requested.is_relative_to(repo.resolve()), 'projection directory must be outside the checkout')
+    fd = os.open(requested, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(fd)
+        cli.require(metadata.st_uid == os.geteuid() and metadata.st_mode & 0o077 == 0, 'projection directory is not private')
+        names = os.listdir(fd)
+        cli.require(len(names) <= 100 and all(re.fullmatch(r'[a-z][a-z0-9-]*\.json', name) for name in names), 'invalid projection file inventory')
+        output, total = {}, 0
+        for name in sorted(names):
+            file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            try:
+                before = os.fstat(file_fd)
+                cli.require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid() and before.st_nlink == 1 and
+                            not before.st_mode & 0o022 and 0 < before.st_size <= MAX_PROJECTION_BYTES, 'unsafe projection file')
+                chunks, remaining = [], before.st_size + 1
+                while remaining:
+                    chunk = os.read(file_fd, min(65536, remaining))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                raw = b''.join(chunks)
+                after = os.fstat(file_fd)
+                current = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                cli.require(len(raw) == before.st_size and
+                            (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
+                            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) and
+                            (current.st_dev, current.st_ino) == (before.st_dev, before.st_ino), 'projection file changed during read')
+                total += len(raw)
+                cli.require(total <= MAX_PROJECTIONS_BYTES, 'projections exceed total byte limit')
+                output[name[:-5]] = raw
+            finally:
+                os.close(file_fd)
+        current = requested.lstat()
+        cli.require((current.st_dev, current.st_ino) == (metadata.st_dev, metadata.st_ino), 'projection directory changed during read')
+        return output
+    finally:
+        os.close(fd)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', type=Path, required=True)
@@ -200,12 +324,17 @@ def main() -> None:
     parser.add_argument('--head', required=True)
     parser.add_argument('--result', type=Path, required=True)
     parser.add_argument('--execution-evidence', type=Path, required=True)
+    parser.add_argument('--projection-dir', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     cli.require(os.environ.get('GITHUB_ACTIONS') == 'true', 'producer must run in the trusted GitHub workflow')
     repository = {'id': int(os.environ['GITHUB_REPOSITORY_ID']), 'fullName': os.environ['GITHUB_REPOSITORY']}
     run = {'id': int(os.environ['GITHUB_RUN_ID']), 'attempt': int(os.environ['GITHUB_RUN_ATTEMPT']), 'event': os.environ['GITHUB_EVENT_NAME'], 'ref': os.environ['GITHUB_REF']}
-    value = build_envelope(args.repo, args.base, args.head, args.result, args.execution_evidence, repository, run)
+    if args.projection_dir is None:
+        value = build_envelope(args.repo, args.base, args.head, args.result, args.execution_evidence, repository, run)
+    else:
+        projections = read_projection_directory(args.projection_dir, args.repo)
+        value = build_envelope_v2(args.repo, args.base, args.head, args.result, args.execution_evidence, repository, run, projections)
     # Private output is created once; m3 must verify its attestation and result bytes.
     with args.output.open('x', encoding='utf-8') as output:
         output.write(json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n')

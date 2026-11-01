@@ -167,6 +167,69 @@ def _coverage(state, language) -> dict[str, object]:
     return {'status': native['status'], 'confidence': confidence, 'detectorSet': detectors, 'detectors': coverage_detectors, 'notes': notes}
 
 
+def comparison_key(projection) -> str:
+    comparison = {name: projection[name] for name in ('repositoryId', 'area', 'desloppifyVersion', 'scannerPatch',
+                  'language', 'scanPath', 'scanCompleteness', 'coverage')}
+    comparison['excludes'] = sorted(projection['excludes'])
+    return 'sha256:' + hashlib.sha256(json.dumps(comparison, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+
+def validate_public_projection(value) -> None:
+    """Validate publishable fields only; this does not authenticate the scan."""
+    coverage = value['coverage']
+    a.object_fields(coverage, {'status', 'confidence', 'detectorSet', 'detectors', 'notes'}, 'projection coverage')
+    a.cli.require(coverage['status'] in {'full', 'reduced'} and type(coverage['confidence']) in {int, float} and
+                  math.isfinite(coverage['confidence']) and 0 <= coverage['confidence'] <= 1, 'invalid projection coverage')
+    for detector in _array(coverage['detectorSet'], 'projection detector set', MAX_DETECTORS):
+        _text(detector, 'projection detector', 128)
+    for item in _array(coverage['detectors'], 'projection coverage detectors', MAX_DETECTORS):
+        a.object_fields(item, {'detector', 'status', 'confidence', 'details'}, 'projection coverage detector')
+        _text(item['detector'], 'projection coverage detector', 128)
+        a.cli.require(item['status'] in {'full', 'reduced'} and type(item['confidence']) in {int, float} and
+                      math.isfinite(item['confidence']) and 0 <= item['confidence'] <= 1, 'invalid projection detector coverage')
+        a.object_fields(item['details'], {'tool', 'reason', 'summary', 'impact'} if item['status'] == 'reduced' else set(), 'projection coverage details')
+        a.cli.require(all(isinstance(detail, str) and len(detail.encode('utf-8')) <= 400 for detail in item['details'].values()), 'invalid projection coverage details')
+    for note in _array(coverage['notes'], 'projection coverage notes', 32):
+        a.object_fields(note, {'detector', 'status', 'reason', 'summary'}, 'projection coverage note')
+        for name in note:
+            _text(note[name], 'projection coverage note ' + name, 400 if name in {'reason', 'summary'} else 128)
+    for dimension in _array(value['mechanicalDimensions'], 'projection dimensions', 64):
+        a.object_fields(dimension, {'name', 'health', 'strict', 'openIssueCount', 'tier', 'detectors'}, 'projection dimension')
+        _text(dimension['name'], 'projection dimension name', 128)
+        _score(dimension['health'], 'projection dimension health')
+        _score(dimension['strict'], 'projection dimension strict')
+        _count(dimension['openIssueCount'], 'projection dimension open count')
+        _tier(dimension['tier'])
+        for detector in _array(dimension['detectors'], 'projection dimension detectors', MAX_DETECTORS):
+            _text(detector, 'projection dimension detector', 128)
+    counts = value['counts']
+    a.object_fields(counts, {'total', 'open', 'fixed', 'wontfix', 'byDetector'}, 'projection counts')
+    for name in ('total', 'open', 'fixed', 'wontfix'):
+        _count(counts[name], 'projection count')
+    for row in _array(counts['byDetector'], 'projection counts by detector', MAX_DETECTORS):
+        a.object_fields(row, {'detector', 'open', 'fixed', 'wontfix'}, 'projection detector count')
+        _text(row['detector'], 'projection count detector', 128)
+        for name in ('open', 'fixed', 'wontfix'):
+            _count(row[name], 'projection detector count')
+    for finding in _array(value['findings'], 'projection findings', MAX_FINDINGS):
+        a.object_fields(finding, {'id', 'detector', 'dimension', 'tier', 'confidence', 'summary', 'file', 'line', 'redacted'}, 'projection finding')
+        _text(finding['id'], 'projection finding ID')
+        _text(finding['detector'], 'projection finding detector', 128)
+        if finding['dimension'] is not None:
+            _text(finding['dimension'], 'projection finding dimension', 128)
+        _tier(finding['tier'])
+        a.cli.require(finding['confidence'] in {'low', 'medium', 'high'} and finding['redacted'] is True, 'invalid projection finding')
+        _text(finding['summary'], 'projection finding summary', SUMMARY_CHARS)
+        _path(finding['file'])
+        a.cli.require(finding['line'] is None or (type(finding['line']) is int and 0 < finding['line'] <= 2 ** 53 - 1), 'invalid projection finding line')
+    a.object_fields(value['hotspots'], {'files', 'directories'}, 'projection hotspots')
+    for kind, maximum in [('files', 10_000), ('directories', 2_000)]:
+        for row in _array(value['hotspots'][kind], 'projection hotspots', maximum):
+            a.object_fields(row, {'path', 'open'}, 'projection hotspot')
+            _path(row['path'])
+            _count(row['open'], 'projection hotspot count')
+
+
 def project_mechanical(status, state, area, scan_config, *, repository_id, commit_sha, tool_version, scanner_patch) -> dict[str, object]:
     """Use native values only; publication and subjective joins belong to m3."""
     status, state = _object(status, 'native status'), _object(state, 'native state')
@@ -211,10 +274,8 @@ def project_mechanical(status, state, area, scan_config, *, repository_id, commi
         directories['.' if directory == '.' else '/'.join(directory.split('/')[:3])] += 1
     a.cli.require(len(files) <= 10_000 and len(directories) <= 2_000, 'mechanical hotspot limit exceeded')
     result = {'schemaVersion': 2, 'kind': 'agentsia.code-health.mechanical-projection', 'repositoryId': repository_id, 'area': area['id'], 'commitSha': commit_sha, 'capturedAt': captured, 'desloppifyVersion': tool_version, 'scannerPatch': dict(scanner_patch), 'language': area['language'], 'scanPath': area['path'], 'scanCompleteness': completeness, 'excludes': excludes, 'scores': scores, 'subjectiveAssessment': 'absent', 'mechanicalDimensions': dimensions, 'counts': _counts(state, items), 'coverage': _coverage(state, area['language']), 'findings': sorted(findings, key=lambda finding: finding['id']), 'hotspots': {'files': _tally(files), 'directories': _tally(directories)}}
-    comparison = {'repositoryId': repository_id, 'area': area['id'], 'desloppifyVersion': tool_version, 'scannerPatch': scanner_patch, 'language': area['language'],
-                  'scanPath': area['path'], 'scanCompleteness': completeness, 'excludes': sorted(excludes),
-                  'coverage': result['coverage']}
-    result['comparabilityKey'] = 'sha256:' + hashlib.sha256(json.dumps(comparison, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+    result['comparabilityKey'] = comparison_key(result)
+    validate_public_projection(result)
     encoded = json.dumps(result, ensure_ascii=False, separators=(',', ':'))
     a.cli.require(len(encoded.encode()) <= MAX_PROJECTION_BYTES, 'mechanical projection exceeds its byte limit')
     # Never change identities to hide a secret: refuse publication instead.
