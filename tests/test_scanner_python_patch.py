@@ -64,6 +64,8 @@ class PythonNamespaceGraphTests(unittest.TestCase):
         import importlib.util
         import tempfile
         from pathlib import Path
+        from unittest.mock import patch
+        from desloppify.languages.python.detectors import deps
         source = Path(scanner_patch.scanner_source('python_graph')).read_bytes()
         if scanner_patch.component_digest(source) == scanner_patch.COMPONENTS['python_graph']['patched']:
             patched = source
@@ -85,6 +87,10 @@ class PythonNamespaceGraphTests(unittest.TestCase):
             self.assertEqual([str(imported.resolve())], loaded.resolve_python_from_import(
                 'code_health', 'finding_identity', str(importer), root))
             self.assertEqual([], loaded.resolve_python_from_import('code_health', 'missing', str(importer), root))
+            importer.write_text('from code_health import finding_identity\n')
+            with patch.object(deps, '_resolve_python_from_import', loaded.resolve_python_from_import):
+                graph = deps.build_dep_graph(root)
+            self.assertIn(str(importer.resolve()), graph[str(imported.resolve())]['importers'])
 
 
 if __name__ == '__main__':
