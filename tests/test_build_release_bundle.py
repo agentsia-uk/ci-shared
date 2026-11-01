@@ -1,11 +1,13 @@
 import subprocess
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
 from code_health.build_release_bundle import build_bundle, runtime_files
 from code_health.release_bundle import read_bundle
+from code_health.qualification_candidate import candidate_snapshot
 
 FILES = {'code_health/cli.py', 'code_health/policy.json', 'code_health/requirements.lock'}
 
@@ -34,6 +36,22 @@ class BuildReleaseBundleTests(unittest.TestCase):
         manifest, files, _ = read_bundle(data, policy_commit=self.commit, allowed_files=FILES)
         self.assertEqual(files['code_health/cli.py'], b'committed')
         self.assertEqual(manifest['desloppifyVersion'], '1.0')
+
+    def test_qualification_snapshot_uses_exact_verified_bundle_and_cleans_up(self):
+        data = build_bundle(self.root, self.commit, FILES)
+        digest = hashlib.sha256(data).hexdigest()
+        (self.root / 'code_health/cli.py').write_text('uncommitted')
+        with candidate_snapshot(data, expected_sha256=digest, policy_commit=self.commit, allowed_files=FILES) as snapshot:
+            self.assertEqual((snapshot / 'code_health/cli.py').read_bytes(), b'committed')
+            self.assertEqual((snapshot / 'code_health/cli.py').stat().st_mode & 0o777, 0o644)
+            self.assertEqual(snapshot.stat().st_mode & 0o777, 0o755)
+        self.assertFalse(snapshot.exists())
+        with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+            with candidate_snapshot(data, expected_sha256='0' * 64, policy_commit=self.commit, allowed_files=FILES):
+                pass
+        with self.assertRaises(ValueError):
+            with candidate_snapshot(data, expected_sha256=digest, policy_commit='0' * 40, allowed_files=FILES):
+                pass
 
     def test_rejects_missing_files_and_invalid_refs(self):
         for commit, paths in [(self.commit, FILES | {'code_health/missing.py'}), ('main', FILES),
