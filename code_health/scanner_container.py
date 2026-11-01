@@ -44,10 +44,12 @@ def _make_readable(root):
 
 
 def _capture(command, env):
-    child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             start_new_session=True)
     deadline = time.monotonic() + 1800
     chunks = []
     size = 0
+    completed = False
     try:
         with selectors.DefaultSelector() as selector:
             selector.register(child.stdout, selectors.EVENT_READ)
@@ -69,10 +71,14 @@ def _capture(command, env):
                         chunks.append(chunk)
         if child.wait(timeout=max(0, deadline - time.monotonic())):
             raise ValueError('isolated scanner failed')
+        completed = True
         return b''.join(chunks)
     finally:
-        if child.poll() is None:
-            child.kill()
+        if not completed:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         try:
             child.wait(timeout=5)
         finally:

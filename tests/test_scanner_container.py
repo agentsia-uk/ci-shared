@@ -6,6 +6,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -127,6 +128,21 @@ class ScannerContainerTests(unittest.TestCase):
         self.assertEqual(b'{}\n', scanner_container._capture(command, {'PATH': os.defpath}))
         with patch.object(scanner_container, 'MAX_LOG_BYTES', 4), self.assertRaisesRegex(ValueError, 'exceeds'):
             scanner_container._capture(command, {'PATH': os.defpath})
+
+    def test_failed_capture_stops_descendant_after_parent_exits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ready, marker = root / 'ready', root / 'late-write'
+            child = f'import pathlib,time; pathlib.Path({str(ready)!r}).touch(); time.sleep(1); pathlib.Path({str(marker)!r}).touch()'
+            parent = ('import pathlib,subprocess,sys,time; '
+                      f'subprocess.Popen([sys.executable,"-c",{child!r}]); '
+                      f'p=pathlib.Path({str(ready)!r}); '
+                      'exec("while not p.exists():\\n time.sleep(0.01)"); '
+                      'sys.stdout.write("x" * 1000); sys.stdout.flush()')
+            with patch.object(scanner_container, 'MAX_LOG_BYTES', 16), self.assertRaisesRegex(ValueError, 'exceeds'):
+                scanner_container._capture([sys.executable, '-c', parent], {'PATH': os.defpath})
+            time.sleep(1.2)
+            self.assertFalse(marker.exists(), 'a descendant survived failed scanner capture')
 
     def test_inspection_rejects_network_even_when_other_settings_match(self):
         image = 'sha256:' + 'b' * 64
