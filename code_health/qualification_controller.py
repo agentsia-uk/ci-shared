@@ -113,6 +113,7 @@ def qualification_cases():
           'pythonNames': ['code_health', 'code_health.cli', 'code_health.qualification_bridge'],
           'relative': 'src/pkg/qualification_bridge.py', 'unrelatedRelative': []}),
         ('finding-move-unchanged', 'finding-move', {'mode': 'unchanged'}, {'errors': []}),
+        ('finding-move-native', 'finding-move', {'mode': 'native'}, {'errors': []}),
         ('finding-move-changed', 'finding-move', {'mode': 'changed'},
          {'errors': ['1 new finding(s) in touched path: src/example.py (security)']}),
         ('finding-move-priority', 'finding-move', {'mode': 'high-priority'},

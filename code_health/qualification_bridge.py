@@ -158,8 +158,13 @@ def _finding_move_fixture(policy, mode):
         new = source if mode != 'changed' else 'def validate(value):\n    return unsafe(value, other=True)\n'
         (head / 'src/example.py').write_text('# inserted\n' + new)
         tier = 2 if mode == 'high-priority' else 4
-        result = policy.compare({'objective_score': 90}, state(finding(2, tier)),
-                                {'objective_score': 90}, state(finding(3, tier)),
+        old, current = finding(2, tier), finding(3, tier)
+        if mode == 'native':
+            for item in (old, current):
+                item['detail'].pop('source')
+                item['detail'].pop('test_name')
+        result = policy.compare({'objective_score': 90}, state(old),
+                                {'objective_score': 90}, state(current),
                                 {'src/example.py'}, {}, 'python', source_roots=(base, head))
         return {'errors': result['errors']}
 
@@ -195,7 +200,7 @@ def observe(request, policy):
             value = _scanner_fixture(policy, operation)
         elif operation == 'scanner-mapping' and not args:
             value = _scanner_mapping_fixture(policy)
-        elif operation == 'finding-move' and set(args) == {'mode'} and args['mode'] in {'unchanged', 'changed', 'high-priority'}:
+        elif operation == 'finding-move' and set(args) == {'mode'} and args['mode'] in {'unchanged', 'changed', 'high-priority', 'native'}:
             value = _finding_move_fixture(policy, args['mode'])
         else:
             raise RuntimeError('unknown qualification operation')
