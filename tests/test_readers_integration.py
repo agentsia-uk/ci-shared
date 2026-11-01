@@ -4,6 +4,7 @@ import ctypes
 from pathlib import Path
 import platform as system_platform
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -48,6 +49,13 @@ class ReaderIntegrationTests(unittest.TestCase):
                                     except OSError as load_error:
                                         raise AssertionError(f'{language} library failed to load: {load_error}') from error
                                     raise
+                            program = ('import sys; sys.path.insert(0,sys.argv.pop(1)); '
+                                       'from code_health import scanner_entrypoint as entry; '
+                                       'entry.READER_DIR=sys.argv.pop(1); sys.argv=["desloppify","--help"]; '
+                                       'entry.main()')
+                            subprocess.run([sys.executable, '-I', '-c', program, str(repo), directory], check=True,
+                                           env={'PATH': os.defpath, 'HOME': directory}, stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.PIPE, timeout=60)
                         finally:
                             os.chmod(directory, 0o700)
                     platform_readers[archive.platform] = {name.rsplit('.', 1)[0] for name in unpacked}
