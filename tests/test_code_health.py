@@ -384,7 +384,8 @@ class RatchetTests(unittest.TestCase):
             git('add', '.')
             git('commit', '-qm', 'before')
             base = git('rev-parse', 'HEAD')
-            (repo / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
+            marker = 'SYNTHETIC-RAW-SOURCE-MUST-NOT-SHIP'
+            (repo / 'service.py').write_text('def handle(value):\n    return eval(value)  # ' + marker + '\n')
             git('add', '.')
             git('commit', '-qm', 'after')
             head = git('rev-parse', 'HEAD')
@@ -404,7 +405,7 @@ class RatchetTests(unittest.TestCase):
             self.assertEqual(head, projection['commitSha'])
             self.assertEqual(report['areas'][0]['objectiveAfter'], projection['scores']['objective'])
             self.assertTrue(any(finding['detector'] == 'security' for finding in projection['findings']))
-            self.assertNotIn('eval(', json.dumps(projection))
+            self.assertNotIn(marker, json.dumps(projection))
             self.assertFalse(any(output.rglob('state.json')))
 
     @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')

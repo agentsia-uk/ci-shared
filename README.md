@@ -210,6 +210,10 @@ has been activated.
 
 The draft mechanical projection records the repository ID, source commit,
 scanner correction, scan scope, detector coverage and native mechanical scores.
+The reusable workflow also accepts an exact non-deleted default-branch push,
+using that commit as both comparison endpoints for a history candidate. A
+caller still needs to opt into push events, and the collector must independently
+verify the branch and source; this does not activate a default-branch feed.
 Its comparison key includes the repository ID and those measurement conditions.
 The producer can bind one projection per manifest area in a version 2 evidence
 record using `--projection-dir`; each input must be a regular file named
