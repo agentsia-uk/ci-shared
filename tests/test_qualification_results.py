@@ -3,7 +3,7 @@ import json
 import unittest
 
 from code_health.qualification_controller import qualification_cases
-from code_health.qualification_results import validate_results
+from code_health.qualification_results import collect_results, validate_results
 from tests.test_qualification_controller import simulated_runner
 
 
@@ -21,6 +21,19 @@ class QualificationResultsTests(unittest.TestCase):
 
     def test_complete_current_run(self):
         self.assertEqual(self.validate(self.result), len(qualification_cases()))
+
+    def test_collected_observations_are_independently_checked(self):
+        data = collect_results(image=None, candidate=None, bridge=None, run_id=123, run_attempt=2,
+                               candidate_sha256='a' * 64, runner=simulated_runner)
+        self.assertEqual(validate_results(data, run_id=123, run_attempt=2, candidate_sha256='a' * 64),
+                         len(qualification_cases()))
+
+    def test_collection_does_not_accept_forged_case_or_verdict(self):
+        def forged(**kwargs):
+            return {'schemaVersion': 1, 'caseId': kwargs['case_id'], 'outcome': 'returned', 'value': None, 'passed': True}
+        with self.assertRaises(ValueError):
+            collect_results(image=None, candidate=None, bridge=None, run_id=123, run_attempt=2,
+                            candidate_sha256='a' * 64, runner=forged)
 
     def test_wrong_identity_missing_reordered_or_forged_results_fail(self):
         variants = []

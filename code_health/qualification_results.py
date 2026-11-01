@@ -7,10 +7,33 @@ import json
 import re
 
 from .qualification_controller import evaluate_observation, qualification_cases
+from .qualification_container import run_candidate
 from .qualification_protocol import MAX_RESPONSE_BYTES, _unique_object, decode_observation
 
 MAX_RESULTS_BYTES = 2 * 1024 * 1024
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
+
+
+def collect_results(*, image, candidate, bridge, run_id, run_attempt, candidate_sha256, runner=run_candidate):
+    """Collect observations without issuing a verdict or release receipt."""
+    if (type(run_id) is not int or run_id < 1 or type(run_attempt) is not int or run_attempt < 1 or
+            not isinstance(candidate_sha256, str) or not SHA256.fullmatch(candidate_sha256)):
+        raise ValueError('invalid qualification identity')
+    observations = []
+    for case_id, operation, arguments, _ in qualification_cases():
+        request = {'schemaVersion': 1, 'caseId': case_id, 'operation': operation, 'arguments': arguments}
+        observation = runner(image=image, candidate=candidate, bridge=bridge, case_id=case_id, request=request)
+        try:
+            encoded = json.dumps(observation, allow_nan=False, separators=(',', ':')).encode()
+        except (TypeError, ValueError, RecursionError) as error:
+            raise ValueError('invalid qualification observation') from error
+        observations.append(decode_observation(encoded, expected_case=case_id))
+    result = {'schemaVersion': 1, 'runId': run_id, 'runAttempt': run_attempt,
+              'candidateSha256': candidate_sha256, 'observations': observations}
+    encoded = json.dumps(result, allow_nan=False, separators=(',', ':')).encode()
+    if len(encoded) > MAX_RESULTS_BYTES:
+        raise ValueError('qualification results exceed size limit')
+    return encoded
 
 
 def validate_results(data: bytes, *, run_id: int, run_attempt: int, candidate_sha256: str):
