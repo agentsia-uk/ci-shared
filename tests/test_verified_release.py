@@ -1,4 +1,7 @@
 import hashlib
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +16,28 @@ ALLOWED = {'code_health/cli.py', 'code_health/requirements.lock', 'code_health/p
 
 
 class VerifiedReleaseTests(unittest.TestCase):
+    def test_rejects_non_regular_and_symbolic_link_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fifo = root / 'fifo'
+            os.mkfifo(fifo)
+            target = root / 'target'
+            target.write_bytes(b'data')
+            link = root / 'link'
+            link.symlink_to(target)
+            program = '''import sys
+from code_health.verified_release import load_verified_release
+try:
+    load_verified_release(sys.argv[1], policy_commit="a"*40, signer_commit="b"*40, allowed_files=set())
+except (OSError, ValueError):
+    sys.exit(0)
+sys.exit(1)
+'''
+            for asset in (fifo, link):
+                with self.subTest(asset=asset):
+                    result = subprocess.run([sys.executable, '-c', program, str(asset)], timeout=5, check=False)
+                    self.assertEqual(result.returncode, 0)
+
     def test_verification_precedes_parsing_and_evidence_is_derived(self):
         with tempfile.TemporaryDirectory() as tmp:
             asset = Path(tmp) / 'download.tar'
