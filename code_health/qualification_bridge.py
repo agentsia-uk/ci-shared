@@ -57,6 +57,29 @@ def _git_fixture(policy, operation, escape):
         return {'touched': sorted(touched), 'renames': renames}
 
 
+def _scanner_fixture(policy, operation):
+    area = {'id': 'fixture-python', 'language': 'python', 'path': '.', 'exclusions': []}
+    with tempfile.TemporaryDirectory(prefix='qualification-scan-') as temporary:
+        root = Path(temporary)
+        before, after = root / 'before', root / 'after'
+        before.mkdir()
+        after.mkdir()
+        (before / 'service.py').write_text('def handle(value):\n    return str(value)\n')
+        (after / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
+        if operation == 'scanner-new-area':
+            status, state = policy.scan(before, area, root / 'before-result', [area])
+            result = policy.compare(None, None, status, state, {'service.py'}, {}, 'python')
+            return {'baselineKind': result['baselineKind'], 'objectiveBefore': result['objectiveBefore'],
+                    'errors': result['errors']}
+        base_status, base_state = policy.scan(before, area, root / 'before-result', [area])
+        head_status, head_state = policy.scan(after, area, root / 'after-result', [area])
+        result = policy.compare(base_status, base_state, head_status, head_state, {'service.py'}, {}, 'python')
+        security = head_state['scan_coverage']['python']['detectors'].get('security', {})
+        return {'securityCoverage': security.get('status'),
+                'hasSecurityFinding': any(f.get('detector') == 'security' for f in head_state['work_items'].values()),
+                'hasSecurityError': any('security' in error for error in result['errors'])}
+
+
 def observe(request, policy):
     if (not isinstance(request, dict) or set(request) != {'schemaVersion', 'caseId', 'operation', 'arguments'} or
             type(request['schemaVersion']) is not int or request['schemaVersion'] != 1 or
@@ -80,6 +103,8 @@ def observe(request, policy):
             value = _git_fixture(policy, operation, args['escape'])
         elif operation == 'git-changed-paths' and not args:
             value = _git_fixture(policy, operation, False)
+        elif operation in {'scanner-new-area', 'scanner-security'} and not args:
+            value = _scanner_fixture(policy, operation)
         else:
             raise RuntimeError('unknown qualification operation')
     except ValueError as error:

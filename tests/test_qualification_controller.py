@@ -15,7 +15,7 @@ def simulated_runner(*, image, candidate, bridge, case_id, request):
 class QualificationControllerTests(unittest.TestCase):
     def test_current_policy_matches_all_qualification_cases_in_local_simulation(self):
         self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, runner=simulated_runner), len(qualification_cases()))
-        self.assertEqual(len(qualification_cases()), 20)
+        self.assertEqual(len(qualification_cases()), 22)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):
@@ -53,6 +53,16 @@ class QualificationControllerTests(unittest.TestCase):
                    'operation': 'git-snapshot', 'arguments': {'escape': True}}
         with self.assertRaisesRegex(ValueError, 'unrelated failure'):
             qualification_bridge.observe(request, BrokenSnapshot())
+
+    def test_scanner_security_requires_finding_and_full_coverage(self):
+        expected = next(case[3] for case in qualification_cases() if case[0] == 'scanner-security')
+        observation = {'schemaVersion': 1, 'caseId': 'scanner-security', 'outcome': 'returned',
+                       'value': {**expected, 'hasSecurityFinding': False}}
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            evaluate_observation(observation, 'scanner-security', expected)
+        observation['value'] = {**expected, 'securityCoverage': 'reduced'}
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            evaluate_observation(observation, 'scanner-security', expected)
 
 
 if __name__ == '__main__':

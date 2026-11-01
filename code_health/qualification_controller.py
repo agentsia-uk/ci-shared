@@ -1,6 +1,6 @@
 """Trusted, independently defined assertions for candidate policy observations.
 
-The current inventory covers configuration, ratchet and selected Git operations only.
+The current inventory covers configuration, ratchet, Git and selected scanner operations only.
 It deliberately cannot issue a release qualification receipt.
 """
 import copy
@@ -73,6 +73,10 @@ def qualification_cases():
         ('git-snapshot-escape', 'git-snapshot', {'escape': True}, 'rejected'),
         ('git-renames-deletions', 'git-changed-paths', {},
          {'touched': ['new name.py', 'old name.py', 'removed.py'], 'renames': {'old name.py': 'new name.py'}}),
+        ('scanner-new-area', 'scanner-new-area', {},
+         {'baselineKind': 'new-area', 'objectiveBefore': None, 'errors': []}),
+        ('scanner-security', 'scanner-security', {},
+         {'securityCoverage': 'full', 'hasSecurityFinding': True, 'hasSecurityError': True}),
     ]
 
 
