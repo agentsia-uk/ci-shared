@@ -39,5 +39,20 @@ class ScannerPatchTests(unittest.TestCase):
                     scanner_patch.verify()
 
 
+    def test_failed_publication_preserves_the_original_scanner(self):
+        original = scanner_patch.scanner_source().read_bytes()
+        if hashlib.sha256(original).hexdigest() == scanner_patch.PATCHED_SHA256:
+            original = original.replace(scanner_patch.NEW.encode(), scanner_patch.OLD.encode())
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'test_coverage.py'
+            source.write_bytes(original)
+            with patch.object(scanner_patch, 'scanner_source', return_value=source), \
+                    patch.object(scanner_patch.os, 'replace', side_effect=OSError('write failed')):
+                with self.assertRaises(OSError):
+                    scanner_patch.install()
+            self.assertEqual(original, source.read_bytes())
+            self.assertEqual([source], list(source.parent.iterdir()))
+
+
 if __name__ == '__main__':
     unittest.main()
