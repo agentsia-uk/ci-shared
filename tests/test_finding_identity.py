@@ -36,6 +36,14 @@ class FindingIdentityTests(unittest.TestCase):
         source = 'def validate(value):\n    return unsafe(value)\n'
         self.assertEqual([], self.compare(source, '# inserted\n\n' + source, finding(2), finding(4)))
 
+    def test_native_python_security_finding_also_tracks_a_proven_move(self):
+        source = 'def validate(value):\n    return unsafe(value)\n'
+        old, new = finding(2), finding(3)
+        for item in (old, new):
+            item['detail'].pop('source')
+            item['detail'].pop('test_name')
+        self.assertEqual([], self.compare(source, '# inserted\n' + source, old, new))
+
     def test_changed_or_duplicated_function_is_new(self):
         source = 'def validate(value):\n    return unsafe(value)\n'
         for changed in ['# inserted\ndef validate(value):\n    return unsafe(value, other=True)\n',

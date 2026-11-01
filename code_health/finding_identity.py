@@ -1,4 +1,4 @@
-"""Recognise uniquely unchanged Python functions for relocated Bandit findings."""
+"""Recognise uniquely unchanged Python scopes for relocated security findings."""
 import ast
 from functools import lru_cache
 import hashlib
@@ -51,11 +51,13 @@ class FindingIdentity:
         identity = tuple(renames.get(part, part) for part in finding['id'].split('::'))
         fallback = (finding['detector'], renames.get(path, path), identity)
         detail = finding.get('detail')
-        if finding['detector'] != 'security' or not isinstance(detail, dict) or detail.get('source') != 'bandit':
+        if (finding['detector'] != 'security' or not path.endswith('.py') or not isinstance(detail, dict)
+                or detail.get('source') not in {None, 'bandit'}):
             return fallback
         uncertain = (finding['detector'], renames.get(path, path), ('unverified-source', side, *identity))
         if (type(detail.get('line')) is not int or detail['line'] < 1
-                or not isinstance(detail.get('kind'), str) or not isinstance(detail.get('test_name'), str)
+                or not isinstance(detail.get('kind'), str)
+                or (detail.get('source') == 'bandit' and not isinstance(detail.get('test_name'), str))
                 or not identity or identity[-1] != str(detail['line'])):
             return uncertain
         parsed = self._source(side, path)
@@ -76,5 +78,5 @@ class FindingIdentity:
                 return uncertain
             evidence.append((hashlib.sha256(text.encode()).hexdigest(), line - node.lineno))
         return (finding['detector'], renames.get(path, path),
-                ('unique-unchanged-python-scope', *identity[:-1], detail['kind'], detail['test_name'],
+                ('unique-unchanged-python-scope', *identity[:-1], detail['kind'], detail.get('test_name'),
                  finding.get('summary'), finding.get('tier'), finding.get('confidence'), tuple(evidence)))
