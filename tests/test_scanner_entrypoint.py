@@ -1,5 +1,9 @@
 import unittest
+import os
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -8,6 +12,42 @@ from code_health import scanner_entrypoint
 
 
 class ScannerEntrypointTests(unittest.TestCase):
+    def test_cancellation_reaps_unresponsive_worker_without_publishing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ready = root / 'ready'
+            worker = ('import os,signal,sys,time; '
+                      'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                      'open(sys.argv[1], "w").write(str(os.getpid())); '
+                      'time.sleep(60)')
+            parent = ('import sys; from code_health.scanner_entrypoint import capture_to_file; '
+                      'capture_to_file([sys.executable, "-c", sys.argv[2], sys.argv[3]], sys.argv[1])')
+            process = subprocess.Popen([sys.executable, '-c', parent, directory, worker, str(ready)],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            worker_pid = None
+            try:
+                deadline = time.monotonic() + 10
+                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                self.assertTrue(ready.exists(), 'worker did not start')
+                worker_pid = int(ready.read_text())
+                process.send_signal(signal.SIGTERM)
+                self.assertNotEqual(process.wait(timeout=12), 0)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(worker_pid, 0)
+                worker_pid = None
+                self.assertFalse((root / scanner_entrypoint.OUTPUT_NAME).exists())
+                self.assertFalse((root / (scanner_entrypoint.OUTPUT_NAME + '.tmp')).exists())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+                if worker_pid is not None:
+                    try:
+                        os.kill(worker_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
     def test_capture_writes_complete_output_and_refuses_partial_publication(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
