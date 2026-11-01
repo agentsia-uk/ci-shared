@@ -24,6 +24,7 @@ runs:
         set -euo pipefail
         version=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["POLICY_ROOT"])/"policy.json").read_text())["desloppifyVersion"])')
         python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
+        python "${POLICY_ROOT}/scanner_patch.py"
     - name: Compare full scans
       shell: bash
       env:

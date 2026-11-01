@@ -43,6 +43,7 @@ jobs:
         run: |
           version=$(python -c 'import json; print(json.load(open("code_health/policy.json"))["desloppifyVersion"])')
           python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
+          python code_health/scanner_patch.py
           python -m unittest discover -s tests -v
 
   qualification-container-boundary:

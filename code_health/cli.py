@@ -21,6 +21,11 @@ import yaml
 
 from desloppify.languages import available_langs, get_lang
 
+if __package__:
+    from . import scanner_patch
+else:
+    import scanner_patch
+
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
 LANGUAGES = set(available_langs())
@@ -412,6 +417,7 @@ def main():
     args = parser.parse_args()
     require(re.fullmatch('[0-9a-f]{40}', args.base) and re.fullmatch('[0-9a-f]{40}', args.head), 'base and head must be full commit SHAs')
     require(version('desloppify') == POLICY['desloppifyVersion'], 'installed scanner version differs from the shared pin')
+    scanner_patch.verify()
     args.output = args.output.resolve()
     require(re.fullmatch(r'agentsia-uk/[A-Za-z0-9_.-]+', args.repository), 'repository must be an agentsia-uk slug')
     repo = args.repo.resolve()
@@ -447,6 +453,7 @@ def main():
         'base': args.base,
         'head': args.head,
         'desloppifyVersion': POLICY['desloppifyVersion'],
+        'scannerPatch': {'id': scanner_patch.PATCH_ID, 'sha256': scanner_patch.PATCHED_SHA256},
         'provenance': provenance,
         'policyChanged': base is not None and base['policyRef'] != head['policyRef'],
         'upgradeEvidence': evidence,
