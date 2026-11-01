@@ -8,4 +8,4 @@ RUN /opt/tool/bin/python -I -m pip install --no-cache-dir --disable-pip-version-
 COPY code_health/scanner_patch.py code_health/readers_lock.py code_health/scanner_entrypoint.py /opt/code-health/code_health/
 RUN --network=none /opt/tool/bin/python -I /opt/code-health/code_health/scanner_patch.py
 WORKDIR /source
-ENTRYPOINT ["/opt/tool/bin/python", "-I", "-B", "-c", "import runpy,sys; sys.path.insert(0,'/opt/code-health'); runpy.run_module('code_health.scanner_entrypoint',run_name='__main__')"]
+ENTRYPOINT ["/usr/bin/timeout", "--signal=TERM", "--kill-after=30s", "1800s", "/opt/tool/bin/python", "-I", "-B", "-c", "import runpy,sys; sys.path.insert(0,'/opt/code-health'); runpy.run_module('code_health.scanner_entrypoint',run_name='__main__')"]
