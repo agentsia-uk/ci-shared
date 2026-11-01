@@ -385,8 +385,8 @@ def verify_scanner():
 
 
 def scan(snapshot_root, area, output, areas):
-    verify_scanner()
     require(sys.platform == 'linux', 'trusted code-health scanning requires Linux')
+    verify_scanner()
     snapshot_root = snapshot_root.resolve()
     root = (snapshot_root / area['path']).resolve()
     require(root.is_relative_to(snapshot_root) and root.is_dir(), 'scan area is missing or escapes its snapshot')

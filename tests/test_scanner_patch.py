@@ -95,7 +95,8 @@ class ScannerPatchTests(unittest.TestCase):
 
     def test_direct_scan_refuses_an_unverified_scanner(self):
         from code_health import cli
-        with patch.object(scanner_patch, 'verify', side_effect=ValueError('scanner changed')):
+        with patch.object(cli.sys, 'platform', 'linux'), \
+                patch.object(scanner_patch, 'verify', side_effect=ValueError('scanner changed')):
             with self.assertRaisesRegex(ValueError, 'scanner changed'):
                 cli.scan(Path('/unused'), {}, Path('/unused'), [])
 
@@ -107,7 +108,8 @@ class ScannerPatchTests(unittest.TestCase):
 
     def test_policy_must_bind_the_exact_scanner_patch(self):
         from code_health import cli
-        with patch.dict(cli.POLICY, {'scannerPatch': {'id': scanner_patch.PATCH_ID, 'sha256': '0' * 64}}), \
+        with patch.object(cli.sys, 'platform', 'linux'), \
+                patch.dict(cli.POLICY, {'scannerPatch': {'id': scanner_patch.PATCH_ID, 'sha256': '0' * 64}}), \
                 patch.object(scanner_patch, 'verify') as verify:
             with self.assertRaisesRegex(ValueError, 'scanner patch differs from policy'):
                 cli.scan(Path('/unused'), {}, Path('/unused'), [])
