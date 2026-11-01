@@ -27,6 +27,8 @@ from code_health import finding_identity, scanner_container, scanner_patch
 
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
+GIT_EXECUTABLE = '/usr/bin/git'
+MAX_CONFIG_BYTES = 1024 * 1024
 LANGUAGES = set(available_langs())
 MAX_UPGRADE_PAGE_BYTES = 16 * 1024 * 1024
 
@@ -126,7 +128,7 @@ def validate_workflow_pin(repo, sha, workflow_path, workflow_ref):
     require(workflow_path.startswith('.github/workflows/') and workflow_path.endswith(('.yml', '.yaml')), 'caller workflow path is invalid')
     expected = f'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@{workflow_ref}'
     # BaseLoader preserves Actions scalars and cannot construct tagged Python objects.
-    workflow = yaml.load(run(['git', 'show', f'{sha}:{workflow_path}'], cwd=repo), Loader=yaml.BaseLoader)
+    workflow = yaml.load(git_blob(repo, sha, workflow_path, max_bytes=MAX_CONFIG_BYTES), Loader=yaml.BaseLoader)
     require(isinstance(workflow, dict) and isinstance(workflow.get('jobs'), dict), 'caller workflow has no jobs')
     found = False
     for job in workflow['jobs'].values():
@@ -177,7 +179,7 @@ def authorized_upgrade(event, repository, touched):
 def upgrade_evidence(event, args, touched):
     if authorized_upgrade(event, args.repository, touched):
         pr = event['pull_request']
-        pin = json.loads(run(['git', 'show', f"{pr['head']['sha']}:{CONFIG}"], cwd=args.repo)).get('policyRef')
+        pin = json.loads(git_blob(args.repo, pr['head']['sha'], CONFIG, max_bytes=MAX_CONFIG_BYTES)).get('policyRef')
         if pin == args.action_ref:
             return {'pullRequest': pr['number'], 'headSha': pr['head']['sha']}
     if 'merge_group' not in event:
@@ -195,13 +197,13 @@ def upgrade_evidence(event, args, touched):
                 continue
             sha = pr['head']['sha']
             require(re.fullmatch('[0-9a-f]{40}', sha), 'invalid upgrade head SHA')
-            contained = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
+            contained = git_process(['merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             require(contained.returncode in {0, 1, 128}, 'could not verify queued upgrade ancestry')
             if contained.returncode:
                 continue
             ancestor = run(['git', 'merge-base', pr['base']['sha'], sha], cwd=args.repo).decode().strip()
             paths, _ = changed_paths(args.repo, ancestor, sha)
-            pin = json.loads(run(['git', 'show', f'{sha}:{CONFIG}'], cwd=args.repo)).get('policyRef')
+            pin = json.loads(git_blob(args.repo, sha, CONFIG, max_bytes=MAX_CONFIG_BYTES)).get('policyRef')
             if pin == args.action_ref and authorized_upgrade({'pull_request': pr}, args.repository, paths):
                 return {'pullRequest': pr['number'], 'headSha': sha}
         if len(prs) < 100:
@@ -234,9 +236,41 @@ def validate_language_coverage(files, areas):
         require(covered, f'supported source file is outside declared language areas: {file}')
 
 
+def git_process(args, *, cwd, env=None, **kwargs):
+    # Preserve normal repository/global config (including safe.directory), but
+    # reject inherited overrides of the repository, object store or configuration.
+    source = os.environ if env is None else env
+    clean = {key: value for key, value in source.items() if not key.startswith('GIT_')}
+    clean['GIT_NO_REPLACE_OBJECTS'] = '1'
+    return subprocess.run([GIT_EXECUTABLE, *args], cwd=cwd, env=clean, timeout=1800, **kwargs)
+
+
 def run(args, *, cwd, env=None):
-    result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=1800)
+    if args[0] == 'git':
+        result = git_process(args[1:], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+    else:
+        result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=1800)
     return result.stdout
+
+
+def git_blob(repo, sha, path, *, max_bytes, optional=False):
+    relative_path(path)
+    require(re.fullmatch('[0-9a-f]{40}', sha), 'Git blob lookup requires an exact commit SHA')
+    tree = run(['git', 'ls-tree', '-z', '--full-tree', f'{sha}^{{commit}}', '--', path], cwd=repo)
+    if not tree:
+        require(optional, f'required Git blob is absent: {path}')
+        return None
+    entries = tree.split(b'\0')
+    require(len(entries) == 2 and entries[-1] == b'', 'invalid exact Git tree entry')
+    metadata, actual_path = entries[0].split(b'\t', 1)
+    mode, kind, oid = metadata.split()
+    require(actual_path == path.encode() and kind == b'blob' and mode in {b'100644', b'100755'} and re.fullmatch(b'[0-9a-f]{40}', oid), 'path must be an exact regular Git blob')
+    size = run(['git', 'cat-file', '-s', oid.decode()], cwd=repo).strip()
+    require(size.isdigit() and int(size) <= max_bytes, 'Git blob exceeds the size limit')
+    raw = run(['git', 'cat-file', 'blob', oid.decode()], cwd=repo)
+    require(len(raw) == int(size), 'Git blob read was incomplete')
+    return raw
+
 
 
 def changed_paths(repo, base, head):
@@ -345,7 +379,7 @@ def snapshot(repo, sha, destination):
     batch = destination.parent / f'{destination.name}.blobs'
     with batch.open('wb') as output:
         requests = b''.join(oid + b'\n' for _, oid, _ in entries)
-        subprocess.run(['git', 'cat-file', '--batch'], input=requests, cwd=repo, stdout=output, stderr=subprocess.PIPE, check=True, timeout=1800)
+        git_process(['cat-file', '--batch'], input=requests, cwd=repo, stdout=output, stderr=subprocess.PIPE, check=True)
     with batch.open('rb') as source:
         for mode, oid, path in entries:
             header = source.readline().split()
@@ -434,10 +468,9 @@ def main():
     args.repo = repo
     for sha in [args.base, args.head]:
         run(['git', 'rev-parse', '--verify', f'{sha}^{{commit}}'], cwd=repo)
-    base_bytes = subprocess.run(['git', 'show', f'{args.base}:{CONFIG}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
-    require(base_bytes.returncode in {0, 128}, 'could not read base config')
-    base = validate_config(json.loads(base_bytes.stdout)) if base_bytes.returncode == 0 else None
-    head = validate_config(json.loads(run(['git', 'show', f'{args.head}:{CONFIG}'], cwd=repo)))
+    base_bytes = git_blob(repo, args.base, CONFIG, max_bytes=MAX_CONFIG_BYTES, optional=True)
+    base = validate_config(json.loads(base_bytes)) if base_bytes is not None else None
+    head = validate_config(json.loads(git_blob(repo, args.head, CONFIG, max_bytes=MAX_CONFIG_BYTES)))
     touched, renames = changed_paths(repo, args.base, args.head)
     event_path = os.environ.get('GITHUB_EVENT_PATH')
     event = read_json(Path(event_path)) if event_path else {}

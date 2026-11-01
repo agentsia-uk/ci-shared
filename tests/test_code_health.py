@@ -65,35 +65,35 @@ class PolicyTests(unittest.TestCase):
         shared = 'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@'
         valid = 'on: [pull_request, merge_group]\njobs:\n  health:\n    uses: ' + shared + 'b' * 40 + '\n'
         workflow_path = '.github/workflows/ci.yml'
-        with patch.object(r, 'run', return_value=valid.encode()):
+        with patch.object(r, 'git_blob', return_value=valid.encode()):
             r.validate_workflow_pin(Path('.'), 'a' * 40, workflow_path, 'b' * 40)
         invalid = [valid.replace('b' * 40, 'main'), valid.replace('    uses:', '    if: false\n    uses:'), valid.replace('[pull_request, merge_group]', '[push]'), valid.replace('on: [pull_request, merge_group]', 'on:\n  pull_request:\n    paths: [src/**]\n  merge_group:')]
         for text in invalid:
-            with self.subTest(text=text), patch.object(r, 'run', return_value=text.encode()), self.assertRaises(ValueError):
+            with self.subTest(text=text), patch.object(r, 'git_blob', return_value=text.encode()), self.assertRaises(ValueError):
                 r.validate_workflow_pin(Path('.'), 'a' * 40, workflow_path, 'b' * 40)
 
     def test_yaml_loader_preserves_actions_scalars_without_constructing_objects(self):
         with tempfile.TemporaryDirectory() as temporary:
             marker = Path(temporary) / 'must-not-exist'
             text = ('metadata: !!python/object/apply:os.system ["touch ' + str(marker) + '"]\non: [pull_request, merge_group]\njobs:\n  health:\n    continue-on-error: false\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n').encode()
-            with patch.object(r, 'run', return_value=text):
+            with patch.object(r, 'git_blob', return_value=text):
                 r.validate_workflow_pin(Path('.'), 'c' * 40, '.github/workflows/health.yml', 'b' * 40)
             self.assertFalse(marker.exists())
 
     def test_policy_provenance_is_bound_to_actual_action_and_caller(self):
         args = SimpleNamespace(action_repository='agentsia-uk/ci-shared', action_ref='a' * 40, caller_sha='c' * 40, caller_ref='agentsia-uk/example/.github/workflows/actual.yml@refs/pull/1/merge', repository='agentsia-uk/example')
         text = ('on: [pull_request, merge_group]\njobs:\n  health:\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n').encode()
-        with patch.object(r, 'run', return_value=text) as command:
+        with patch.object(r, 'git_blob', return_value=text) as command:
             provenance = r.execution_provenance(Path('.'), args, config())
             self.assertEqual('a' * 40, provenance['actionRef'])
             self.assertEqual('c' * 40, provenance['callerWorkflowSha'])
             self.assertEqual('b' * 40, provenance['callerDeclaredWorkflowRef'])
-            self.assertEqual(['git', 'show', 'c' * 40 + ':.github/workflows/actual.yml'], command.call_args.args[0])
+            self.assertEqual((Path('.'), 'c' * 40, '.github/workflows/actual.yml'), command.call_args.args)
         args.action_ref = 'd' * 40
         with self.assertRaisesRegex(ValueError, 'executing action'):
             r.execution_provenance(Path('.'), args, config())
         args.action_ref = 'a' * 40
-        with patch.object(r, 'run', return_value=b'on: [pull_request, merge_group]\njobs: {other: {runs-on: linux}}'), self.assertRaisesRegex(ValueError, 'actual caller'):
+        with patch.object(r, 'git_blob', return_value=b'on: [pull_request, merge_group]\njobs: {other: {runs-on: linux}}'), self.assertRaisesRegex(ValueError, 'actual caller'):
             r.execution_provenance(Path('.'), args, config())
 
     def test_policy_pin_change_requires_a_dedicated_upgrade(self):
@@ -115,7 +115,7 @@ class PolicyTests(unittest.TestCase):
         args = SimpleNamespace(repository='agentsia-uk/example', repo=Path('.'), head='f' * 40, action_ref='a' * 40)
         def response(*_args, **_kwargs):
             return contextlib.closing(io.BytesIO(json.dumps([pr]).encode()))
-        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', side_effect=[b'e' * 40, json.dumps({'policyRef': 'a' * 40}).encode()]):
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', return_value=b'e' * 40), patch.object(r, 'git_blob', return_value=json.dumps({'policyRef': 'a' * 40}).encode()):
             self.assertEqual({'pullRequest': 1, 'headSha': 'd' * 40}, r.upgrade_evidence(event, args, {'src/app.py', r.CONFIG}))
         with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
             self.assertIsNone(r.upgrade_evidence(event, args, {r.CONFIG}))
@@ -243,6 +243,64 @@ class RatchetTests(unittest.TestCase):
             touched, renames = r.changed_paths(repo, base, git('rev-parse', 'HEAD'))
             self.assertEqual({'old name.py', 'new name.py', 'removed.py'}, touched)
             self.assertEqual({'old name.py': 'new name.py'}, renames)
+
+    def test_missing_config_is_distinct_from_corrupt_git_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary).resolve()
+            git = lambda *args: subprocess.check_output(['/usr/bin/git', *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'example').write_text('example')
+            git('add', '.')
+            git('commit', '-qm', 'no config')
+            absent = git('rev-parse', 'HEAD')
+            self.assertIsNone(r.git_blob(repo, absent, r.CONFIG, max_bytes=r.MAX_CONFIG_BYTES, optional=True))
+            (repo / '.github').mkdir()
+            (repo / r.CONFIG).write_text('{}')
+            git('add', '.')
+            git('commit', '-qm', 'config')
+            present = git('rev-parse', 'HEAD')
+            blob = git('rev-parse', f'{present}:{r.CONFIG}')
+            (repo / '.git/objects' / blob[:2] / blob[2:]).unlink()
+            with self.assertRaises(subprocess.CalledProcessError):
+                r.git_blob(repo, present, r.CONFIG, max_bytes=r.MAX_CONFIG_BYTES, optional=True)
+
+    def test_git_boundary_ignores_path_environment_and_replacement_objects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            repo = root / 'repo'
+            repo.mkdir()
+            git = lambda *args: subprocess.check_output([r.GIT_EXECUTABLE, *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'source.py').write_text('original = True\n')
+            git('add', '.')
+            git('commit', '-qm', 'original')
+            original = git('rev-parse', 'HEAD')
+            (repo / 'source.py').write_text('replacement = True\n')
+            git('add', '.')
+            git('commit', '-qm', 'replacement')
+            replacement = git('rev-parse', 'HEAD')
+            worktree = root / 'linked-worktree'
+            git('worktree', 'add', '--quiet', '--detach', str(worktree), original)
+            git('replace', original, replacement)
+            self.assertEqual('replacement = True', git('show', f'{original}:source.py'))
+            binary = root / 'bin'
+            binary.mkdir()
+            marker = root / 'shadow-ran'
+            shadow = binary / 'git'
+            shadow.write_text('#!/bin/sh\nprintf shadow > "' + str(marker) + '"\nexec /usr/bin/git "$@"\n')
+            shadow.chmod(0o755)
+            overrides = {'PATH': str(binary), 'GIT_DIR': str(root / 'wrong.git'), 'GIT_WORK_TREE': str(root / 'wrong-tree'), 'GIT_OBJECT_DIRECTORY': str(root / 'wrong-objects'), 'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(root / 'wrong-alternates'), 'GIT_INDEX_FILE': str(root / 'wrong-index'), 'GIT_CONFIG_GLOBAL': str(root / 'wrong-config'), 'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.bare', 'GIT_CONFIG_VALUE_0': 'true', 'GIT_NO_REPLACE_OBJECTS': '0'}
+            with patch.dict(r.os.environ, overrides):
+                self.assertEqual(b'original = True\n', r.git_blob(worktree, original, 'source.py', max_bytes=100))
+                r.snapshot(worktree, original, root / 'snapshot')
+                result = r.git_process(['merge-base', '--is-ancestor', original, replacement], cwd=worktree, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(b'original = True\n', (root / 'snapshot/source.py').read_bytes())
+            self.assertFalse(marker.exists())
 
     @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_cli_scans_real_git_snapshots_and_ignores_committed_local_state(self):
