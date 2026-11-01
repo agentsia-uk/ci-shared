@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from code_health import prepare_readers, scanner_container, scanner_recovery
-from code_health.cli import scan
+from code_health import mechanical, prepare_readers, scanner_container, scanner_recovery
+from code_health.cli import POLICY, scan
 
 IMAGE = os.environ.get('CODE_HEALTH_SCANNER_IMAGE')
 
@@ -68,7 +68,8 @@ class ScannerContainerTests(unittest.TestCase):
             readers.mkdir(mode=0o700)
             with patch.object(sys, 'argv', ['prepare-readers', '--destination', str(readers)]):
                 prepare_readers.main()
-            (source / 'sample.py').write_text('def answer():\n    return 42\n')
+            evidence = 'SYNTHETIC-RAW-SOURCE-MUST-NOT-SHIP'
+            (source / 'sample.py').write_text('def answer(value):\n    return eval(value)  # ' + evidence + '\n')
             config = source / '.desloppify'
             config.mkdir(mode=0o700)
             (config / 'config.json').write_text(json.dumps({'generate_scorecard': False, 'trust_plugins': False,
@@ -86,6 +87,15 @@ class ScannerContainerTests(unittest.TestCase):
             self.assertTrue((output / 'state.json').is_file())
             self.assertIsInstance(status, dict)
             self.assertIsInstance(state, dict)
+            actual_config = json.loads((source / '.desloppify/config.json').read_text())
+            self.assertIn(evidence, json.dumps(state))
+            projection = mechanical.project_mechanical(status, state, area, actual_config,
+                commit_sha='a' * 40, tool_version=POLICY['desloppifyVersion'], scanner_patch=POLICY['scannerPatch'])
+            self.assertEqual(status['objective_score'], projection['scores']['objective'])
+            self.assertEqual(status['strict_score'], projection['scores']['strict'])
+            self.assertEqual(POLICY['scannerPatch'], projection['scannerPatch'])
+            self.assertNotIn(evidence, json.dumps(projection))
+            self.assertTrue(any(finding['detector'] == 'security' for finding in projection['findings']))
 
 
 if __name__ == '__main__':
