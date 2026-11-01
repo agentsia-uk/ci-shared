@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from code_health.release_attestation import GH_EXECUTABLE, REPOSITORY_ID, read_command, verify_local_attestation, verify_release
+from code_health.release_attestation import GH_EXECUTABLE, REPOSITORY_ID, CALLER, read_command, verify_local_attestation, verify_release
 
 POLICY = 'a' * 40
 SIGNER = 'b' * 40
@@ -25,7 +25,7 @@ class ReleaseAttestationTests(unittest.TestCase):
             elif argv[1] == 'api':
                 value = {'sha': commit}
             elif argv[1] == 'attestation':
-                value = [{'verificationResult': {'signature': {'certificate': {'sourceRepositoryIdentifier': repository_id}}}}]
+                value = [{'verificationResult': {'signature': {'certificate': {'sourceRepositoryIdentifier': repository_id, 'buildConfigURI': CALLER, 'buildConfigDigest': POLICY}}}}]
             else:
                 value = {}
             return json.dumps(value).encode()
@@ -52,7 +52,7 @@ class ReleaseAttestationTests(unittest.TestCase):
                 self.run_verifier(**kwargs)
 
     def test_local_attestation_is_bound_to_exact_run_and_attempt(self):
-        certificate = {'sourceRepositoryIdentifier': REPOSITORY_ID, 'buildTrigger': 'push',
+        certificate = {'sourceRepositoryIdentifier': REPOSITORY_ID, 'buildConfigURI': CALLER, 'buildConfigDigest': POLICY, 'buildTrigger': 'push',
                        'runInvocationURI': 'https://github.com/agentsia-uk/ci-shared/actions/runs/12/attempts/2'}
         def command(argv):
             if argv[1] == '--version':
@@ -68,6 +68,10 @@ class ReleaseAttestationTests(unittest.TestCase):
                     verify_local_attestation('asset.tar', policy_commit=POLICY, signer_commit=SIGNER, run_id=12, run_attempt=2)
                 certificate.clear()
                 certificate.update(original)
+            certificate['buildConfigURI'] = 'https://github.com/agentsia-uk/ci-shared/.github/workflows/other.yml@refs/heads/main'
+            with self.assertRaisesRegex(ValueError, 'calling workflow'):
+                verify_local_attestation('asset.tar', policy_commit=POLICY, signer_commit=SIGNER, run_id=12, run_attempt=2)
+            certificate['buildConfigURI'] = CALLER
             with self.assertRaisesRegex(ValueError, 'run identity'):
                 verify_local_attestation('asset.tar', policy_commit=POLICY, signer_commit=SIGNER, run_id=12)
         prior = {**certificate, 'runInvocationURI': 'https://github.com/agentsia-uk/ci-shared/actions/runs/11/attempts/1'}

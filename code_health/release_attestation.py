@@ -10,6 +10,7 @@ import time
 REPOSITORY = 'agentsia-uk/ci-shared'
 REPOSITORY_ID = '1259100960'
 SIGNER = REPOSITORY + '/.github/workflows/code-health-release.yml'
+CALLER = 'https://github.com/' + REPOSITORY + '/.github/workflows/code-health-release-dispatch.yml@refs/heads/main'
 SHA = re.compile(r'[0-9a-f]{40}\Z')
 GH_EXECUTABLE = '/usr/bin/gh'
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -110,6 +111,8 @@ def verify_local_attestation(asset: str | os.PathLike[str], *, policy_commit: st
             raise ValueError('verified certificate lacks repository identity') from error
         if repo_id != REPOSITORY_ID:
             raise ValueError('verified certificate has the wrong repository identity')
+        if certificate.get('buildConfigURI') != CALLER or certificate.get('buildConfigDigest') != policy_commit:
+            raise ValueError('verified certificate has the wrong calling workflow identity')
         if run_id is not None and (certificate.get('runInvocationURI') ==
                 f'https://github.com/{REPOSITORY}/actions/runs/{run_id}/attempts/{run_attempt}' and
                 certificate.get('buildTrigger') == 'push'):
