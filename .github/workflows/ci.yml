@@ -50,10 +50,14 @@ jobs:
           CODE_HEALTH_READER_INTEGRATION=1 "$tool_dir/bin/python" -m unittest tests.test_readers_integration -v
           DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-scanner-test:local .
           CODE_HEALTH_SCANNER_IMAGE=code-health-scanner-test:local "$tool_dir/bin/python" -m unittest tests.test_scanner_container_integration -v
-          test_readers=$(mktemp -d "${RUNNER_TEMP:?}/code-health-test-readers.XXXXXXXX")
+          test_task=$(mktemp -d "${RUNNER_TEMP:?}/code-health-task.XXXXXXXX")
+          test_readers="$test_task/readers"
+          mkdir "$test_readers" "$test_task/tmp"
+          chmod 700 "$test_readers" "$test_task/tmp"
           "$tool_dir/bin/python" -I -c 'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); runpy.run_module("code_health.prepare_readers",run_name="__main__")' "$PWD" --destination "$test_readers"
           test_image=$(docker image inspect --format '{{.Id}}' code-health-scanner-test:local)
-          CODE_HEALTH_TEST_IMAGE="$test_image" CODE_HEALTH_TEST_READERS="$test_readers" "$tool_dir/bin/python" -m unittest \
+          CODE_HEALTH_TEST_IMAGE="$test_image" CODE_HEALTH_TEST_READERS="$test_readers" \
+          CODE_HEALTH_TASK_DIR="$test_task" CODE_HEALTH_TASK_ID="$(stat -c '%d:%i' "$test_task")" TMPDIR="$test_task/tmp" "$tool_dir/bin/python" -m unittest \
             tests.test_code_health.RatchetTests.test_cli_scans_real_git_snapshots_and_ignores_committed_local_state \
             tests.test_code_health.RatchetTests.test_new_area_has_no_fabricated_baseline_score \
             tests.test_code_health.RatchetTests.test_actual_scanner_rejects_new_security_defect -v

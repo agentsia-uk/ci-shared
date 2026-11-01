@@ -12,6 +12,7 @@ import threading
 import time
 
 from .qualification_container import DOCKER, ENVIRONMENT, _require_seccomp
+from . import scanner_recovery
 
 IMAGE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 CONTAINER = re.compile(r'[0-9a-f]{64}\Z')
@@ -77,6 +78,15 @@ def _inspect(container, image, mounts, env):
         raise ValueError('scanner container inspection exceeds its size limit')
     try:
         record = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError('invalid scanner container inspection') from error
+    if not isinstance(record, dict) or record.get('Id') != container:
+        raise ValueError('scanner container inspection identity differs')
+    _validate_inspection(record, image, mounts)
+
+
+def _validate_inspection(record, image, mounts):
+    try:
         host = record['HostConfig']
         actual = {(item['Source'], item['Destination'], item['RW']) for item in record['Mounts']}
         expected = {(str(source), target, mode != 'readonly') for source, target, mode in mounts}
@@ -86,19 +96,24 @@ def _inspect(container, image, mounts, env):
                 or host['CapDrop'] != ['ALL'] or 'no-new-privileges' not in host['SecurityOpt']
                 or 'seccomp=builtin' not in host['SecurityOpt'] or actual != expected):
             raise ValueError('scanner container restrictions differ from the required policy')
-    except (KeyError, TypeError, UnicodeError, json.JSONDecodeError) as error:
+    except (KeyError, TypeError) as error:
         raise ValueError('invalid scanner container inspection') from error
+
+
+def _present(container, env):
+    listing = subprocess.run([DOCKER, 'ps', '--all', '--no-trunc', '--filter', 'id=' + container,
+                              '--format', '{{.ID}}'], env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
+    if listing.strip() not in (b'', container.encode()):
+        raise ValueError('invalid scanner container lookup')
+    return bool(listing.strip())
 
 
 def _remove(container, env):
     result = subprocess.run([DOCKER, 'rm', '--force', container], env=env, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, timeout=60)
-    if result.returncode:
-        listing = subprocess.run([DOCKER, 'ps', '--all', '--no-trunc', '--filter', 'id=' + container,
-                                  '--format', '{{.ID}}'], env=env, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
-        if listing.strip():
-            raise ValueError('scanner container could not be removed')
+    if result.returncode and _present(container, env):
+        raise ValueError('scanner container could not be removed')
 
 
 def run_scanner(*, image, source, readers, output, arguments):
@@ -120,6 +135,7 @@ def run_scanner(*, image, source, readers, output, arguments):
         paths.append(path)
     if any(a == b or a in b.parents or b in a.parents for i, a in enumerate(paths) for b in paths[i + 1:]):
         raise ValueError('scanner directories must not overlap')
+    labels = scanner_recovery.labels(paths)
     _require_seccomp()
     mounts = [(paths[0], '/source', 'readonly'), (paths[1], '/opt/code-health/readers', 'readonly'),
               (paths[2], '/output', '')]
@@ -129,6 +145,8 @@ def run_scanner(*, image, source, readers, output, arguments):
                '--ipc', 'none', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=4g',
                '-e', 'HOME=/tmp', '-e', 'DESLOPPIFY_ROOT=/source', '-e', 'CI=true', '-e', 'NO_COLOR=1',
                '-e', 'npm_config_yes=false']
+    for key, value in sorted(labels.items()):
+        command.extend(['--label', key + '=' + value])
     for host, target, mode in mounts:
         command.extend(['--mount', f'type=bind,src={host},dst={target}' + (',' + mode if mode else '')])
     env = ENVIRONMENT

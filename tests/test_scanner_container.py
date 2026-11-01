@@ -32,7 +32,7 @@ class ScannerContainerTests(unittest.TestCase):
         image = 'sha256:' + 'b' * 64
         mounts = [(Path('/source'), '/source', 'readonly'), (Path('/readers'), '/readers', 'readonly'),
                   (Path('/output'), '/output', '')]
-        record = {'Image': image, 'Config': {'User': f'{os.getuid()}:{os.getgid()}'},
+        record = {'Id': 'a' * 64, 'Image': image, 'Config': {'User': f'{os.getuid()}:{os.getgid()}'},
                   'HostConfig': {'NetworkMode': 'none', 'ReadonlyRootfs': True, 'Privileged': False, 'AutoRemove': True,
                                  'IpcMode': 'none', 'CapDrop': ['ALL'],
                                  'SecurityOpt': ['no-new-privileges', 'seccomp=builtin']},
@@ -73,6 +73,7 @@ class ScannerContainerTests(unittest.TestCase):
                 return created
             with patch.object(scanner_container.os, 'geteuid', return_value=root.stat().st_uid), \
                     patch.object(scanner_container, '_require_seccomp'), \
+                    patch.object(scanner_container.scanner_recovery, 'labels', return_value={}), \
                     patch.object(scanner_container, '_inspect'), \
                     patch.object(scanner_container.subprocess, 'run', side_effect=docker) as run, \
                     patch.object(scanner_container, '_capture', side_effect=TimeoutError('timeout')):
@@ -94,6 +95,7 @@ class ScannerContainerTests(unittest.TestCase):
             previous = signal.getsignal(signal.SIGTERM)
             with patch.object(scanner_container.os, 'geteuid', return_value=root.stat().st_uid), \
                     patch.object(scanner_container, '_require_seccomp'), \
+                    patch.object(scanner_container.scanner_recovery, 'labels', return_value={}), \
                     patch.object(scanner_container, '_inspect'), \
                     patch.object(scanner_container.subprocess, 'run', side_effect=docker) as run, \
                     patch.object(scanner_container, '_capture', side_effect=lambda *_: os.kill(os.getpid(), signal.SIGTERM)):
