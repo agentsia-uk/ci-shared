@@ -23,12 +23,18 @@ class ReleasePublishTests(unittest.TestCase):
         self.ref = None
         self.release = None
         self.enabled = True
+        self.ruleset = {'id': 123, 'source_type': 'Repository', 'source': 'agentsia-uk/ci-shared',
+                        'target': 'tag', 'enforcement': 'active', 'bypass_actors': [],
+                        'conditions': {'ref_name': {'include': ['refs/tags/code-health-*'], 'exclude': []}},
+                        'rules': [{'type': 'update'}, {'type': 'deletion'}]}
         self.main_commit = COMMIT
         self.extra_releases = []
         self.commands = []
         self.mutations = []
         self.replace_before_upload = False
         self.replace_before_publish = False
+        self.ruleset_reads = 0
+        self.disable_ruleset_before_publish = False
 
     def valid_draft(self):
         return {'id': 12, 'tag_name': TAG, 'author': {'id': BOT_ID}, 'draft': True, 'immutable': False, 'assets': []}
@@ -39,6 +45,12 @@ class ReleasePublishTests(unittest.TestCase):
             if url.endswith('/immutable-releases'):
                 self.assertEqual(request.get_header('Authorization'), 'Bearer read-token')
                 value = {'enabled': self.enabled}
+            elif url.endswith('/rulesets/123'):
+                self.assertEqual(request.get_header('Authorization'), 'Bearer read-token')
+                self.ruleset_reads += 1
+                if self.disable_ruleset_before_publish and self.ruleset_reads > 1:
+                    self.ruleset['enforcement'] = 'disabled'
+                value = self.ruleset
             elif url.endswith('/branches/main'):
                 value = {'commit': {'sha': self.main_commit}}
             elif url.endswith('/git/refs') and request.get_method() == 'POST':
@@ -84,7 +96,8 @@ class ReleasePublishTests(unittest.TestCase):
                 self.release = self.valid_draft()
             return b''
 
-        with patch.dict('os.environ', {'GH_TOKEN': 'test-token', 'RELEASE_ADMIN_READ_TOKEN': 'read-token'}), \
+        with patch.dict('os.environ', {'GH_TOKEN': 'test-token', 'RELEASE_ADMIN_READ_TOKEN': 'read-token',
+                                      'CODE_HEALTH_TAG_RULESET_ID': '123'}), \
              patch('code_health.release_publish.ensure_gh_version'), \
              patch('code_health.release_publish.urllib.request.urlopen', side_effect=get), \
              patch('code_health.release_publish.read_command', side_effect=command):
@@ -178,3 +191,31 @@ class ReleasePublishTests(unittest.TestCase):
         self.assertIsNone(self.ref)
         self.assertEqual(self.commands, [])
         self.assertEqual(self.mutations, [])
+
+    def test_unprotected_or_bypassable_tags_are_rejected_before_mutation(self):
+        from copy import deepcopy
+        original = deepcopy(self.ruleset)
+        variants = [
+            {'enforcement': 'disabled'},
+            {'target': 'branch'},
+            {'source': 'agentsia-uk/another'},
+            {'bypass_actors': [{'actor_type': 'RepositoryRole', 'actor_id': 5, 'bypass_mode': 'always'}]},
+            {'conditions': {'ref_name': {'include': ['refs/tags/*'], 'exclude': []}}},
+            {'conditions': {'ref_name': {'include': ['refs/tags/code-health-*'], 'exclude': ['refs/tags/code-health-*']}}},
+            {'rules': [{'type': 'update'}]},
+        ]
+        for variant in variants:
+            with self.subTest(variant=variant):
+                self.ruleset = {**deepcopy(original), **variant}
+                with self.assertRaisesRegex(ValueError, 'tag protection'):
+                    self.call()
+                self.assertIsNone(self.ref)
+                self.assertEqual(self.commands, [])
+                self.assertEqual(self.mutations, [])
+
+    def test_protection_removed_after_draft_refuses_publication(self):
+        self.disable_ruleset_before_publish = True
+        with self.assertRaisesRegex(ValueError, 'tag protection'):
+            self.call()
+        self.assertEqual(self.mutations, ['upload'])
+        self.assertTrue(self.release['draft'])

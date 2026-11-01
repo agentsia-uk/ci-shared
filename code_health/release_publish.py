@@ -26,6 +26,9 @@ def publish(asset: Path, policy_commit: str) -> None:
     admin_read_token = os.environ.get('RELEASE_ADMIN_READ_TOKEN')
     if not token or not admin_read_token:
         raise ValueError('release and administration-read tokens are required')
+    ruleset_id = os.environ.get('CODE_HEALTH_TAG_RULESET_ID', '')
+    if not ruleset_id.isascii() or not ruleset_id.isdecimal() or int(ruleset_id) < 1:
+        raise ValueError('valid tag protection ruleset ID is required')
     ensure_gh_version()
 
     def api(path: str, *, body=None, admin=False, method=None, upload=None):
@@ -97,6 +100,21 @@ def publish(asset: Path, policy_commit: str) -> None:
         if not isinstance(settings, dict) or settings.get('enabled') is not True:
             raise ValueError('immutable releases are not enabled')
 
+    def require_tag_protection() -> None:
+        ruleset = api('rulesets/' + ruleset_id, admin=True)
+        if not isinstance(ruleset, dict):
+            raise ValueError('tag protection ruleset is missing')
+        conditions = ruleset.get('conditions')
+        refs = conditions.get('ref_name') if isinstance(conditions, dict) else None
+        rules = ruleset.get('rules')
+        types = {rule.get('type') for rule in rules if isinstance(rule, dict)} if isinstance(rules, list) else set()
+        if (ruleset.get('id') != int(ruleset_id) or ruleset.get('source_type') != 'Repository' or
+                ruleset.get('source') != REPOSITORY or ruleset.get('target') != 'tag' or
+                ruleset.get('enforcement') != 'active' or ruleset.get('bypass_actors') != [] or
+                not isinstance(refs, dict) or refs.get('include') != ['refs/tags/code-health-*'] or
+                refs.get('exclude') != [] or not {'update', 'deletion'}.issubset(types)):
+            raise ValueError('tag protection ruleset is not the approved active no-bypass policy')
+
     def require_current_main() -> None:
         branch = api('branches/main')
         commit = branch.get('commit') if isinstance(branch, dict) else None
@@ -119,6 +137,7 @@ def publish(asset: Path, policy_commit: str) -> None:
         raise ValueError('release listing exceeds its page limit')
 
     require_immutable_setting()
+    require_tag_protection()
     exists = tag_exists_and_matches()
     release = find_release()
     if release is not None:
@@ -157,6 +176,7 @@ def publish(asset: Path, policy_commit: str) -> None:
             raise ValueError('release changed before publication')
         inspect_release(current, allow_missing_asset=False)
         require_immutable_setting()
+        require_tag_protection()
         require_current_main()
         api(f"releases/{release['id']}", method='PATCH', body={'draft': False})
         release = find_release()
