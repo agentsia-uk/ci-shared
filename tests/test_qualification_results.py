@@ -12,7 +12,7 @@ class QualificationResultsTests(unittest.TestCase):
         observations = []
         for case_id, operation, arguments, _ in qualification_cases():
             request = {'schemaVersion': 1, 'caseId': case_id, 'operation': operation, 'arguments': arguments}
-            observations.append(simulated_runner(image=None, candidate=None, bridge=None, case_id=case_id, request=request))
+            observations.append(simulated_runner(image=None, candidate=None, bridge=None, readers=None, case_id=case_id, request=request))
         self.result = {'schemaVersion': 1, 'runId': 123, 'runAttempt': 2,
                        'candidateSha256': 'a' * 64, 'observations': observations}
 
@@ -23,7 +23,7 @@ class QualificationResultsTests(unittest.TestCase):
         self.assertEqual(self.validate(self.result), len(qualification_cases()))
 
     def test_collected_observations_are_independently_checked(self):
-        data = collect_results(image=None, candidate=None, bridge=None, run_id=123, run_attempt=2,
+        data = collect_results(image=None, candidate=None, bridge=None, readers=None, run_id=123, run_attempt=2,
                                candidate_sha256='a' * 64, runner=simulated_runner)
         self.assertEqual(validate_results(data, run_id=123, run_attempt=2, candidate_sha256='a' * 64),
                          len(qualification_cases()))
@@ -32,7 +32,7 @@ class QualificationResultsTests(unittest.TestCase):
         def forged(**kwargs):
             return {'schemaVersion': 1, 'caseId': kwargs['case_id'], 'outcome': 'returned', 'value': None, 'passed': True}
         with self.assertRaises(ValueError):
-            collect_results(image=None, candidate=None, bridge=None, run_id=123, run_attempt=2,
+            collect_results(image=None, candidate=None, bridge=None, readers=None, run_id=123, run_attempt=2,
                             candidate_sha256='a' * 64, runner=forged)
 
     def test_wrong_identity_missing_reordered_or_forged_results_fail(self):

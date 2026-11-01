@@ -96,12 +96,14 @@ def _scanner_fixture(policy, operation):
         (after / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
         def inside_sandbox(*, image, source, readers, output, arguments):
             del image, readers
-            executable = str(Path(sys.executable).with_name('desloppify'))
+            executable = str(Path(sys.executable))
+            program = ('import runpy,sys; sys.path.insert(0,"/opt/code-health"); '
+                       'runpy.run_module("code_health.scanner_entrypoint",run_name="__main__")')
             args = [str(output / 'state.json') if arg == '/output/state.json' else arg for arg in arguments]
             env = {'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
                    'HOME': str(root), 'DESLOPPIFY_ROOT': str(source), 'CI': 'true', 'NO_COLOR': '1',
                    'npm_config_yes': 'false'}
-            return subprocess.run([executable, *args], cwd=source, env=env, stdout=subprocess.PIPE,
+            return subprocess.run([executable, '-I', '-B', '-c', program, *args], cwd=source, env=env, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, timeout=120, check=True).stdout
         original = policy.scanner_container.run_scanner
         policy.scanner_container.run_scanner = inside_sandbox

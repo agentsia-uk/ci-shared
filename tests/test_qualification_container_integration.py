@@ -25,10 +25,12 @@ class ContainerBoundaryTests(unittest.TestCase):
             package = candidate / 'code_health'
             package.mkdir(mode=0o755)
             (package / 'cli.py').write_text('import sys\nsys.exit(0)\n')
+            readers = root / 'readers'
+            readers.mkdir(mode=0o755)
             bridge = Path(__file__).resolve().parents[1] / 'code_health/qualification_bridge.py'
             request = {'schemaVersion': 1, 'caseId': 'config-valid', 'operation': 'config', 'arguments': {}}
             with self.assertRaises(ValueError):
-                run_candidate(image=IMAGE, candidate=candidate, bridge=bridge,
+                run_candidate(image=IMAGE, candidate=candidate, bridge=bridge, readers=readers,
                               case_id='config-valid', request=request)
 
     def test_complete_candidate_observations_are_checked_outside_the_container(self):
@@ -51,6 +53,8 @@ class ContainerBoundaryTests(unittest.TestCase):
             candidate = root / 'candidate'
             candidate.mkdir(mode=0o755)
             candidate.chmod(0o755)
+            readers = root / 'readers'
+            readers.mkdir(mode=0o755)
             bridge = root / 'probe.py'
             bridge.write_text('''import json, os, socket, sys
 request = json.load(sys.stdin)
@@ -64,7 +68,7 @@ mounts = {}
 with open('/proc/self/mountinfo') as source:
     for line in source:
         fields = line.split()
-        if fields[4] in ('/', '/candidate'):
+        if fields[4] in ('/', '/candidate', '/opt/code-health/readers'):
             mounts[fields[4]] = fields[5].split(',')
 with socket.socket() as connection:
     connection.settimeout(2)
@@ -76,16 +80,17 @@ with open('/tmp/probe', 'w') as target:
     target.write('temporary storage works')
 value = {'uid': os.getuid(), 'caps': status.get('CapEff'), 'noNewPrivileges': status.get('NoNewPrivs'),
          'seccomp': status.get('Seccomp'), 'candidateReadOnly': 'ro' in mounts.get('/candidate', []),
+         'readersReadOnly': 'ro' in mounts.get('/opt/code-health/readers', []),
          'rootReadOnly': 'ro' in mounts.get('/', []), 'networkBlocked': network_blocked,
          'secretAbsent': 'QUALIFICATION_TEST_SECRET' not in os.environ}
 print(json.dumps({'schemaVersion': 1, 'caseId': request['caseId'], 'outcome': 'returned', 'value': value}))
 ''')
             bridge.chmod(0o644)
             with patch.dict(os.environ, {'QUALIFICATION_TEST_SECRET': 'synthetic-secret'}):
-                observation = run_candidate(image=IMAGE, candidate=candidate, bridge=bridge, case_id='boundary-probe',
+                observation = run_candidate(image=IMAGE, candidate=candidate, bridge=bridge, readers=readers, case_id='boundary-probe',
                                             request={'caseId': 'boundary-probe'})
             self.assertEqual(observation['value'], {'uid': 65534, 'caps': '0000000000000000',
-                'noNewPrivileges': '1', 'seccomp': '2', 'candidateReadOnly': True,
+                'noNewPrivileges': '1', 'seccomp': '2', 'candidateReadOnly': True, 'readersReadOnly': True,
                 'rootReadOnly': True, 'networkBlocked': True, 'secretAbsent': True})
 
 

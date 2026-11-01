@@ -154,12 +154,12 @@ def evaluate_observation(observation, expected_case, expected):
         raise ValueError('candidate disagrees with the trusted qualification case')
 
 
-def run_qualification_cases(*, image, candidate, bridge, runner=run_candidate):
+def run_qualification_cases(*, image, candidate, bridge, readers, runner=run_candidate):
     """Exercise the current cases; this is not a complete qualification."""
     completed = 0
     for case_id, operation, arguments, expected in qualification_cases():
         request = {'schemaVersion': 1, 'caseId': case_id, 'operation': operation, 'arguments': arguments}
-        observation = runner(image=image, candidate=candidate, bridge=bridge, case_id=case_id, request=request)
+        observation = runner(image=image, candidate=candidate, bridge=bridge, readers=readers, case_id=case_id, request=request)
         evaluate_observation(observation, case_id, expected)
         completed += 1
     return completed

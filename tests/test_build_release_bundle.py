@@ -1,4 +1,5 @@
 import subprocess
+from contextlib import nullcontext
 import tempfile
 import unittest
 import hashlib
@@ -162,8 +163,9 @@ class BuildReleaseBundleTests(unittest.TestCase):
             self.assertEqual((candidate / 'code_health/cli.py').read_bytes(), b'committed')
             seen.append(candidate)
             return {'schemaVersion': 1, 'caseId': case_id, 'outcome': 'returned', 'value': None}
-        result = collect_bundle_results(bundle=data, expected_sha256=digest, policy_commit=self.commit,
-                                        allowed_files=FILES, image=None, bridge=None, run_id=1, run_attempt=1, runner=runner)
+        with patch('code_health.qualification_results.reader_snapshot', return_value=nullcontext(self.root)):
+            result = collect_bundle_results(bundle=data, expected_sha256=digest, policy_commit=self.commit,
+                                            allowed_files=FILES, image=None, bridge=None, run_id=1, run_attempt=1, runner=runner)
         self.assertTrue(result)
         self.assertTrue(seen)
         self.assertTrue(all(candidate == seen[0] for candidate in seen))

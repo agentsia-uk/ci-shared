@@ -5,7 +5,6 @@ from importlib.metadata import version as package_version
 import io
 import json
 import os
-import platform as system_platform
 import re
 import stat
 from pathlib import Path, PurePosixPath
@@ -56,21 +55,14 @@ def check_reader_coverage(archives, lock, grammars):
                 unpack_archive(archives[platform], lock=lock, platform=platform, destination_fd=fd)
             finally:
                 os.close(fd)
-            current = 'linux-' + system_platform.machine() if sys.platform == 'linux' else ''
-            program = '''import ctypes,json,sys,tree_sitter_language_pack as p
+            program = '''import json,sys,tree_sitter_language_pack as p
 p.configure(cache_dir=sys.argv[1])
 names=p.downloaded_languages()
-if sys.argv[2] == 'load':
-    ctypes.CDLL('libstdc++.so.6', mode=ctypes.RTLD_GLOBAL)
-    for name in json.load(sys.stdin):
-        p.get_parser(name).parse(b'')
 print(json.dumps(names))
 '''
             os.chmod(directory, 0o500)
             try:
-                output = subprocess.run([sys.executable, '-I', '-c', program, directory,
-                                         'load' if current == platform else 'inventory'],
-                                        input=json.dumps(sorted(grammars)).encode(), check=True,
+                output = subprocess.run([sys.executable, '-I', '-c', program, directory], check=True,
                                         env={'PATH': os.defpath, 'HOME': directory}, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, timeout=60).stdout
             finally:

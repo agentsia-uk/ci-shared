@@ -19,6 +19,8 @@ class QualificationContainerTests(unittest.TestCase):
         self.candidate.mkdir()
         self.bridge = root / 'bridge.py'
         self.bridge.write_text('# synthetic bridge\n')
+        self.readers = root / 'readers'
+        self.readers.mkdir()
         self.log = root / 'calls.jsonl'
         self.mode = root / 'mode'
         self.mode.write_text('ok')
@@ -63,7 +65,7 @@ elif sys.argv[1] == 'rm' and mode == 'cleanup-fails':
         with patch('code_health.qualification_container.DOCKER', str(self.docker)), \
              patch.dict(os.environ, {'TEST_SECRET': 'must-not-be-inherited'}):
             return run_candidate(image=self.image, candidate=self.candidate, bridge=self.bridge,
-                                 case_id='case-one', request={'caseId': 'case-one'}, timeout=timeout)
+                                 readers=self.readers, case_id='case-one', request={'caseId': 'case-one'}, timeout=timeout)
 
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
@@ -78,7 +80,7 @@ elif sys.argv[1] == 'rm' and mode == 'cleanup-fails':
                      ('--security-opt', 'no-new-privileges'), ('--security-opt', 'seccomp=builtin')]:
             self.assertTrue(any(args[i:i+2] == list(pair) for i in range(len(args)-1)))
         self.assertIn('--read-only', args)
-        self.assertEqual(sum('readonly' in arg for arg in args), 2)
+        self.assertEqual(sum('readonly' in arg for arg in args), 3)
         self.assertIn(self.image, args)
 
     def test_failure_or_timeout_removes_the_exact_container(self):
@@ -110,7 +112,7 @@ elif sys.argv[1] == 'rm' and mode == 'cleanup-fails':
             for image, request in [('example/policy:latest', {'caseId': 'case-one'}),
                                    (self.image, {'caseId': 'case-one', 'payload': 'x' * 70000})]:
                 with self.subTest(image=image), self.assertRaises(ValueError):
-                    run_candidate(image=image, candidate=self.candidate, bridge=self.bridge,
+                    run_candidate(image=image, candidate=self.candidate, bridge=self.bridge, readers=self.readers,
                                   case_id='case-one', request=request)
         self.assertFalse(self.log.exists())
 

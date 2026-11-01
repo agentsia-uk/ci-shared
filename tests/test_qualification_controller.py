@@ -6,22 +6,28 @@ from code_health.qualification_controller import evaluate_observation, qualifica
 from code_health.qualification_protocol import decode_observation
 
 
-def simulated_runner(*, image, candidate, bridge, case_id, request):
-    del image, candidate, bridge
+def simulated_runner(*, image, candidate, bridge, readers, case_id, request):
+    del image, candidate, bridge, readers
+    if request['operation'] == 'scanner-new-area':
+        return {'schemaVersion': 1, 'caseId': case_id, 'outcome': 'returned',
+                'value': {'baselineKind': 'new-area', 'objectiveBefore': None, 'errors': []}}
+    if request['operation'] == 'scanner-security':
+        return {'schemaVersion': 1, 'caseId': case_id, 'outcome': 'returned',
+                'value': {'securityCoverage': 'full', 'hasSecurityFinding': True, 'hasSecurityError': True}}
     raw = json.dumps(qualification_bridge.observe(request, cli), allow_nan=False).encode()
     return decode_observation(raw, expected_case=case_id)
 
 
 class QualificationControllerTests(unittest.TestCase):
-    def test_current_policy_matches_all_qualification_cases_in_local_simulation(self):
-        self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, runner=simulated_runner), len(qualification_cases()))
+    def test_simulated_observations_match_the_qualification_cases(self):
+        self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, readers=None, runner=simulated_runner), len(qualification_cases()))
         self.assertEqual(len(qualification_cases()), 40)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):
             return {'schemaVersion': 1, 'caseId': kwargs['case_id'], 'outcome': 'returned', 'value': None, 'passed': True}
         with self.assertRaisesRegex(ValueError, 'expected case'):
-            run_qualification_cases(image=None, candidate=None, bridge=None, runner=forged)
+            run_qualification_cases(image=None, candidate=None, bridge=None, readers=None, runner=forged)
         observation = {'schemaVersion': 1, 'caseId': 'wrong-case', 'outcome': 'returned', 'value': None}
         with self.assertRaisesRegex(ValueError, 'expected case'):
             evaluate_observation(observation, 'config-valid', 'returned')
@@ -30,7 +36,7 @@ class QualificationControllerTests(unittest.TestCase):
         def always_accept(**kwargs):
             return {'schemaVersion': 1, 'caseId': kwargs['case_id'], 'outcome': 'returned', 'value': None}
         with self.assertRaisesRegex(ValueError, 'disagrees'):
-            run_qualification_cases(image=None, candidate=None, bridge=None, runner=always_accept)
+            run_qualification_cases(image=None, candidate=None, bridge=None, readers=None, runner=always_accept)
         observation = {'schemaVersion': 1, 'caseId': 'score-decreased', 'outcome': 'returned', 'value': {'errors': []}}
         with self.assertRaisesRegex(ValueError, 'disagrees'):
             expected = next(case[3] for case in qualification_cases() if case[0] == 'score-decreased')

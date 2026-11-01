@@ -103,7 +103,7 @@ def _exchange(container_id: str, request: bytes, timeout: float) -> bytes:
                     stream.close()
 
 
-def run_candidate(*, image: str, candidate: Path, bridge: Path, case_id: str,
+def run_candidate(*, image: str, candidate: Path, bridge: Path, readers: Path, case_id: str,
                   request: dict, timeout: float = 30) -> dict:
     if not isinstance(image, str) or not IMAGE.fullmatch(image):
         raise ValueError('qualification image must have a full immutable digest')
@@ -123,6 +123,7 @@ def run_candidate(*, image: str, candidate: Path, bridge: Path, case_id: str,
             '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16m', '--ulimit', 'nofile=64:64',
             '--mount', _mount(candidate, '/candidate', directory=True),
             '--mount', _mount(bridge, '/qualification-bridge.py', directory=False),
+            '--mount', _mount(readers, '/opt/code-health/readers', directory=True),
             '--entrypoint', '/opt/tool/bin/python', image, '-I', '-B', '/qualification-bridge.py']
     created = subprocess.run(args, env=ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                              timeout=30, check=True).stdout.decode('ascii').strip()
