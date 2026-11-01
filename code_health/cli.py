@@ -376,6 +376,7 @@ def snapshot(repo, sha, destination):
 
 
 def scan(snapshot_root, area, output, areas):
+    scanner_patch.verify()
     snapshot_root = snapshot_root.resolve()
     root = (snapshot_root / area['path']).resolve()
     require(root.is_relative_to(snapshot_root) and root.is_dir(), 'scan area is missing or escapes its snapshot')

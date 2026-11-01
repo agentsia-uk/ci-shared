@@ -40,6 +40,12 @@ class ScannerPatchTests(unittest.TestCase):
                     scanner_patch.verify()
 
 
+    def test_direct_scan_refuses_an_unverified_scanner(self):
+        from code_health import cli
+        with patch.object(scanner_patch, 'verify', side_effect=ValueError('scanner changed')):
+            with self.assertRaisesRegex(ValueError, 'scanner changed'):
+                cli.scan(Path('/unused'), {}, Path('/unused'), [])
+
     def test_failed_publication_preserves_the_original_scanner(self):
         original = scanner_patch.scanner_source().read_bytes()
         if hashlib.sha256(original).hexdigest() == scanner_patch.PATCHED_SHA256:
