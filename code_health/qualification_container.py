@@ -21,6 +21,20 @@ CONTAINER_ID = re.compile(r'[0-9a-f]{64}\Z')
 ENVIRONMENT = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'DOCKER_CONFIG': '/nonexistent'}
 
 
+def _require_seccomp():
+    result = subprocess.run([DOCKER, 'info', '--format', '{{json .SecurityOptions}}'], env=ENVIRONMENT,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
+    if len(result) > 4096:
+        raise ValueError('invalid Docker security options')
+    try:
+        options = json.loads(result)
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise ValueError('invalid Docker security options') from error
+    if (not isinstance(options, list) or any(not isinstance(option, str) for option in options) or
+            not any(option.split(',')[0] == 'name=seccomp' for option in options)):
+        raise ValueError('Docker seccomp support is required for qualification')
+
+
 def _mount(path: Path, target: str, *, directory: bool) -> str:
     resolved = path.resolve(strict=True)
     if ',' in str(resolved) or (not resolved.is_dir() if directory else not resolved.is_file()):
@@ -101,6 +115,7 @@ def run_candidate(*, image: str, candidate: Path, bridge: Path, case_id: str,
     payload = json.dumps(request, separators=(',', ':'), allow_nan=False).encode() + b'\n'
     if len(payload) > MAX_REQUEST_BYTES:
         raise ValueError('candidate request exceeds size limit')
+    _require_seccomp()
     args = [DOCKER, 'create', '--interactive', '--pull', 'never', '--network', 'none', '--read-only',
             '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
             '--security-opt', 'seccomp=builtin', '--pids-limit', '64', '--memory', '512m',

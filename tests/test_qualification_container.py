@@ -30,7 +30,14 @@ log = Path({str(self.log)!r})
 with log.open('a') as f:
     f.write(json.dumps({{'args': sys.argv[1:], 'secret_inherited': 'TEST_SECRET' in os.environ}}) + '\\n')
 mode = Path({str(self.mode)!r}).read_text()
-if sys.argv[1] == 'create':
+if sys.argv[1] == 'info':
+    if mode == 'no-seccomp':
+        print(json.dumps(['name=apparmor']))
+    elif mode == 'invalid-info':
+        print('invalid')
+    else:
+        print(json.dumps(['name=seccomp,profile=builtin']))
+elif sys.argv[1] == 'create':
     print('a' * 64)
 elif sys.argv[1] == 'start':
     request = json.load(sys.stdin)
@@ -64,9 +71,9 @@ elif sys.argv[1] == 'rm' and mode == 'cleanup-fails':
     def test_isolated_container_and_bounded_protocol(self):
         self.assertEqual(self.run_case()['value'], 7)
         calls = self.calls()
-        self.assertEqual([entry['args'][0] for entry in calls], ['create', 'start', 'rm'])
+        self.assertEqual([entry['args'][0] for entry in calls], ['info', 'create', 'start', 'rm'])
         self.assertTrue(all(not entry['secret_inherited'] for entry in calls))
-        args = calls[0]['args']
+        args = calls[1]['args']
         for pair in [('--pull', 'never'), ('--network', 'none'), ('--cap-drop', 'ALL'), ('--user', '65534:65534'),
                      ('--security-opt', 'no-new-privileges'), ('--security-opt', 'seccomp=builtin')]:
             self.assertTrue(any(args[i:i+2] == list(pair) for i in range(len(args)-1)))
@@ -88,6 +95,15 @@ elif sys.argv[1] == 'rm' and mode == 'cleanup-fails':
         self.mode.write_text('cleanup-fails')
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_case()
+
+    def test_missing_or_invalid_seccomp_support_refuses_creation(self):
+        for mode in ('no-seccomp', 'invalid-info'):
+            with self.subTest(mode=mode):
+                self.mode.write_text(mode)
+                self.log.unlink(missing_ok=True)
+                with self.assertRaises(ValueError):
+                    self.run_case()
+                self.assertEqual([entry['args'][0] for entry in self.calls()], ['info'])
 
     def test_mutable_images_and_large_requests_are_refused_before_creation(self):
         with patch('code_health.qualification_container.DOCKER', str(self.docker)):
