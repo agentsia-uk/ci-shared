@@ -81,13 +81,7 @@ class ScannerContainerTests(unittest.TestCase):
             metadata = root.stat()
             env = {'RUNNER_TEMP': str(parent), 'CODE_HEALTH_TASK_DIR': str(root),
                    'CODE_HEALTH_TASK_ID': f'{metadata.st_dev}:{metadata.st_ino}'}
-            def diagnostic(command, environment):
-                result = subprocess.run(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-                if result.returncode:
-                    raise ValueError((result.stdout + result.stderr).decode(errors='replace')[-5000:])
-                return result.stdout
-            capture = diagnostic if os.environ.get('CODE_HEALTH_ROOTLESS_DIAGNOSTIC') else scanner_container._capture
-            with patch.dict(os.environ, env), patch.object(scanner_container, '_capture', side_effect=capture):
+            with patch.dict(os.environ, env):
                 status, state = scan(source, area, output, [area], scanner_image=image_id, readers=readers)
             self.assertTrue((output / 'state.json').is_file())
             self.assertIsInstance(status, dict)
