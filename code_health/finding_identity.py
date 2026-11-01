@@ -1,4 +1,4 @@
-"""Recognise uniquely unchanged Python scopes for relocated security findings."""
+"""Recognise uniquely unchanged source scopes for relocated security findings."""
 import ast
 from functools import lru_cache
 import hashlib
@@ -6,7 +6,11 @@ import os
 import stat
 from pathlib import Path, PurePosixPath
 
+from tree_sitter import Language, Parser
+import tree_sitter_typescript
+
 MAX_SOURCE_BYTES = 1024 * 1024
+TYPESCRIPT_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'}
 
 
 class FindingIdentity:
@@ -38,8 +42,15 @@ class FindingIdentity:
             if len(data) > MAX_SOURCE_BYTES:
                 return None
             source = data.decode('utf-8')
-            tree = ast.parse(source)
-        except (OSError, UnicodeError, SyntaxError, ValueError, RecursionError, RuntimeError):
+            if path.suffix == '.py':
+                tree = ast.parse(source)
+            else:
+                grammar = (tree_sitter_typescript.language_tsx if path.suffix in {'.tsx', '.jsx'}
+                           else tree_sitter_typescript.language_typescript)
+                tree = Parser(Language(grammar())).parse(data)
+                if tree.root_node.has_error:
+                    return None
+        except (OSError, UnicodeError, SyntaxError, ValueError, TypeError, RecursionError, RuntimeError):
             return None
         finally:
             if fd is not None:
@@ -51,8 +62,10 @@ class FindingIdentity:
         identity = tuple(renames.get(part, part) for part in finding['id'].split('::'))
         fallback = (finding['detector'], renames.get(path, path), identity)
         detail = finding.get('detail')
-        if (finding['detector'] != 'security' or not path.endswith('.py') or not isinstance(detail, dict)
-                or detail.get('source') not in {None, 'bandit'}):
+        suffix = PurePosixPath(path).suffix
+        if (finding['detector'] != 'security' or suffix not in TYPESCRIPT_EXTENSIONS | {'.py'}
+                or not isinstance(detail, dict) or detail.get('source') not in {None, 'bandit'}
+                or (suffix != '.py' and detail.get('source') is not None)):
             return fallback
         uncertain = (finding['detector'], renames.get(path, path), ('unverified-source', side, *identity))
         if (type(detail.get('line')) is not int or detail['line'] < 1
@@ -65,21 +78,34 @@ class FindingIdentity:
             return uncertain
         source, tree = parsed
         line = detail['line']
-        scopes = [node for node in ast.walk(tree)
-                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                  and node.lineno <= line <= node.end_lineno]
-        if not scopes:
-            scopes = [node for node in tree.body if isinstance(node, ast.stmt)
-                      and node.lineno <= line <= node.end_lineno]
-        if not scopes or any(getattr(node, 'decorator_list', ()) for node in scopes):
-            return uncertain
-        scopes.sort(key=lambda node: (node.lineno, -node.end_lineno))
         evidence = []
-        for node in scopes:
-            text = ast.get_source_segment(source, node)
-            if not text or source.count(text) != 1:
+        if suffix == '.py':
+            scopes = [node for node in ast.walk(tree)
+                      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                      and node.lineno <= line <= node.end_lineno]
+            if not scopes:
+                scopes = [node for node in tree.body if isinstance(node, ast.stmt)
+                          and node.lineno <= line <= node.end_lineno]
+            if not scopes or any(getattr(node, 'decorator_list', ()) for node in scopes):
                 return uncertain
-            evidence.append((hashlib.sha256(text.encode()).hexdigest(), line - node.lineno))
+            scopes.sort(key=lambda node: (node.lineno, -node.end_lineno))
+            for node in scopes:
+                text = ast.get_source_segment(source, node)
+                if not text or source.count(text) != 1:
+                    return uncertain
+                evidence.append((hashlib.sha256(text.encode()).hexdigest(), line - node.lineno))
+            proof = 'unique-unchanged-python-scope'
+        else:
+            nodes = [node for node in tree.root_node.named_children if node.type != 'comment'
+                     and node.start_point.row <= line - 1 <= node.end_point.row]
+            if len(nodes) != 1:
+                return uncertain
+            node = nodes[0]
+            text = node.text
+            if not text or source.encode('utf-8').count(text) != 1:
+                return uncertain
+            evidence.append((hashlib.sha256(text).hexdigest(), line - 1 - node.start_point.row))
+            proof = 'unique-unchanged-typescript-statement'
         return (finding['detector'], renames.get(path, path),
-                ('unique-unchanged-python-scope', *identity[:-1], detail['kind'], detail.get('test_name'), detail.get('severity'),
+                (proof, *identity[:-1], detail['kind'], detail.get('test_name'), detail.get('severity'),
                  finding.get('summary'), finding.get('tier'), finding.get('confidence'), tuple(evidence)))

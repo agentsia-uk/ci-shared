@@ -99,9 +99,10 @@ scans with the same pinned scanner. It refuses an objective-score decrease,
 new mechanical findings in touched files, and remaining T1/T2 findings in
 those files. A cross-file finding counts when any related file is touched.
 Git renames preserve the identity of inherited lower-priority findings. For
-Python security findings, a changed line number preserves identity only when every
-containing undecorated function or class, or the top-level statement, is unique
-and byte-for-byte unchanged in both source snapshots. Changed, ambiguous, inaccessible or unparseable source
+Python and TypeScript security findings, a changed line number preserves identity
+only when the uniquely identified surrounding code is byte-for-byte unchanged
+in both source snapshots. Python uses undecorated containing scopes or a top-level
+statement; TypeScript uses the complete top-level statement. Changed, ambiguous, inaccessible or unparseable source
 is treated as new; other detectors retain their native identity rules. High-priority
 findings in touched files still block. Changed detector coverage fails closed. A genuinely new project/language area
 records `objectiveBefore: null` and `baselineKind: new-area`; the candidate is

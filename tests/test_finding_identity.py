@@ -12,9 +12,9 @@ def finding(line, *, path='src/example.py', rule='B506', tier=4):
             'detail': {'source': 'bandit', 'line': line, 'kind': rule, 'test_name': 'yaml_load'}}
 
 
-def state(items):
+def state(items, language='python'):
     return {'version': 3, 'work_items': {str(index): item for index, item in enumerate(items)},
-            'scan_coverage': {'python': {'status': 'full', 'detectors': {'security': {'status': 'full', 'confidence': 1}}}}}
+            'scan_coverage': {language: {'status': 'full', 'detectors': {'security': {'status': 'full', 'confidence': 1}}}}}
 
 
 class FindingIdentityTests(unittest.TestCase):
@@ -26,11 +26,11 @@ class FindingIdentityTests(unittest.TestCase):
         (self.base / 'src').mkdir(parents=True)
         (self.head / 'src').mkdir(parents=True)
 
-    def compare(self, old_source, new_source, old, new, renames=None):
+    def compare(self, old_source, new_source, old, new, renames=None, language='python'):
         (self.base / old['file']).write_text(old_source)
         (self.head / new['file']).write_text(new_source)
-        return cli.compare({'objective_score': 90}, state([old]), {'objective_score': 90}, state([new]),
-                           {old['file'], new['file']}, renames or {}, 'python', source_roots=(self.base, self.head))['errors']
+        return cli.compare({'objective_score': 90}, state([old], language), {'objective_score': 90}, state([new], language),
+                           {old['file'], new['file']}, renames or {}, language, source_roots=(self.base, self.head))['errors']
 
     def test_uniquely_unchanged_function_moved_by_inserted_lines_is_inherited(self):
         source = 'def validate(value):\n    return unsafe(value)\n'
@@ -67,6 +67,52 @@ class FindingIdentityTests(unittest.TestCase):
         self.assertTrue(self.compare(source, changed, finding(2), finding(2)))
         decorated = '@policy\ndef validate(value):\n    return unsafe(value)\n'
         self.assertTrue(self.compare(decorated, decorated, finding(3), finding(3)))
+
+    def test_typescript_and_tsx_unique_unchanged_statements_can_move(self):
+        examples = [('src/example.ts', 'export function validate(value: string) {\n  return eval(value);\n}\n'),
+                    ('src/example.tsx', 'export const View = () => (\n  <div dangerouslySetInnerHTML={{__html: value}} />\n);\n')]
+        for path, source in examples:
+            with self.subTest(path=path):
+                old, new = finding(2, path=path), finding(3, path=path)
+                for item in (old, new):
+                    item['detail'].pop('source')
+                    item['detail'].pop('test_name')
+                self.assertEqual([], self.compare(source, '// inserted\n' + source, old, new, language='typescript'))
+                changed = source.replace('value', 'other')
+                self.assertTrue(self.compare(source, '// inserted\n' + changed, old, new, language='typescript'))
+                self.assertTrue(self.compare(source, '// inserted\n' + source + source, old, new, language='typescript'))
+                self.assertTrue(self.compare(source, 'invalid {\n', old, new, language='typescript'))
+
+    def test_real_typescript_security_entries_match_when_unchanged(self):
+        from desloppify.engine.detectors.security.rules import SecurityRule, make_security_entry
+        path = 'src/example.ts'
+        rule = SecurityRule('eval_usage', 'eval risk', 'high', 'medium', 'avoid eval')
+        def actual(line):
+            entry = make_security_entry(path, line, 'return eval(value);', rule)
+            return {**entry, 'id': f"security::{path}::{entry['name']}", 'status': 'open',
+                    'work_item_kind': 'mechanical_defect', 'tier': 4, 'detector': 'security'}
+        source = 'export function validate(value: string) {\n  return eval(value);\n}\n'
+        self.assertEqual([], self.compare(source, '// inserted\n' + source, actual(2), actual(3), language='typescript'))
+
+    def test_typescript_priority_and_severity_changes_still_block(self):
+        source = 'export function validate(value: string) {\n  return eval(value);\n}\n'
+        old, new = finding(2, path='src/example.ts', tier=2), finding(3, path='src/example.ts', tier=2)
+        for item in (old, new):
+            item['detail'].pop('source')
+            item['detail'].pop('test_name')
+        self.assertTrue(any('T2 remains' in error for error in
+                            self.compare(source, '// inserted\n' + source, old, new, language='typescript')))
+        old['tier'] = new['tier'] = 4
+        old['detail']['severity'], new['detail']['severity'] = 'low', 'high'
+        self.assertTrue(self.compare(source, '// inserted\n' + source, old, new, language='typescript'))
+
+    def test_two_statements_on_same_line_cannot_be_uniquely_matched(self):
+        source = 'const a = eval(x); const b = eval(y);\n'
+        old, new = finding(1, path='src/example.ts'), finding(2, path='src/example.ts')
+        for item in (old, new):
+            item['detail'].pop('source')
+            item['detail'].pop('test_name')
+        self.assertTrue(self.compare(source, '// inserted\n' + source, old, new, language='typescript'))
 
     def test_changed_finding_severity_is_new(self):
         source = 'def validate(value):\n    return unsafe(value)\n'
