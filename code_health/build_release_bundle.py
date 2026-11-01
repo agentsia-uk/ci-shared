@@ -1,6 +1,7 @@
 """Build a deterministic policy bundle from exact committed Git blobs."""
 import hashlib
 import argparse
+from importlib.metadata import version as package_version
 import io
 import json
 import os
@@ -14,7 +15,7 @@ import urllib.parse
 import urllib.request
 
 from .release_bundle import COMMIT, MAX_BUNDLE_BYTES
-from .readers_lock import ASSET_NAMES, MAX_ARCHIVE_BYTES, PLATFORMS, locked_package_version, verify_archive, verify_manifest
+from .readers_lock import ASSET_NAMES, MAX_ARCHIVE_BYTES, PLATFORMS, locked_package_version, required_grammars, verify_archive, verify_manifest
 
 RUNTIME_SOURCE = re.compile(r'code_health/[a-z_][a-z0-9_]*\.py\Z')
 
@@ -110,8 +111,13 @@ def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[s
     if reader_version is not None or present:
         if type(reader_version) is not int or reader_version != 1 or present != reader_files:
             raise ValueError('reader metadata is missing or undeclared')
+        if package_version('desloppify') != policy.get('desloppifyVersion'):
+            raise ValueError('installed scanner differs from the selected policy')
+        installed_version = package_version('tree-sitter-language-pack')
+        if installed_version != locked_package_version(files['code_health/requirements.lock']):
+            raise ValueError('installed reader package differs from the dependency lock')
         lock = verify_manifest(files['code_health/readers-lock.json'], files['code_health/readers-upstream.json'],
-                               package_version=locked_package_version(files['code_health/requirements.lock']), grammars=set())
+                               package_version=installed_version, grammars=required_grammars())
         if download_readers:
             if reader_archives is not None:
                 raise ValueError('choose one reader archive source')

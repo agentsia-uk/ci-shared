@@ -21,6 +21,9 @@ FILES = {'code_health/cli.py', 'code_health/policy.json', 'code_health/requireme
 
 class BuildReleaseBundleTests(unittest.TestCase):
     def setUp(self):
+        grammars = patch('code_health.build_release_bundle.required_grammars', return_value={'tsx'})
+        grammars.start()
+        self.addCleanup(grammars.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.addCleanup(self.directory.cleanup)
@@ -56,6 +59,11 @@ class BuildReleaseBundleTests(unittest.TestCase):
         changed = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.root, text=True).strip()
         with self.assertRaises(ValueError):
             build_bundle(self.root, changed, FILES, reader_archives=self.payloads)
+
+    def test_release_builder_refuses_missing_supported_grammar(self):
+        with patch('code_health.build_release_bundle.required_grammars', return_value={'tsx', 'nim'}):
+            with self.assertRaisesRegex(ValueError, 'does not cover'):
+                build_bundle(self.root, self.commit, FILES, reader_archives=self.payloads)
 
     def test_release_requires_every_exact_reader_archive(self):
         for archives in (None, {k: v for k, v in self.payloads.items() if k != 'linux-x86_64'},
