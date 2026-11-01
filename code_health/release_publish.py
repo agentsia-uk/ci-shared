@@ -15,11 +15,42 @@ BOT_ID = 41898282
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+        raise urllib.error.HTTPError(req.full_url, code, 'release API redirect refused', headers, fp)
 
 
 def open_api(request, *, timeout):
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open(request, timeout=timeout)
+
+
+def validate_tag_protection(ruleset: object, ruleset_id: str) -> None:
+    if not isinstance(ruleset, dict):
+        raise ValueError('tag protection ruleset is missing')
+    conditions = ruleset.get('conditions')
+    refs = conditions.get('ref_name') if isinstance(conditions, dict) else None
+    rules = ruleset.get('rules')
+    types = {rule.get('type') for rule in rules if isinstance(rule, dict)} if isinstance(rules, list) else set()
+    if (ruleset.get('id') != int(ruleset_id) or ruleset.get('source_type') != 'Repository' or
+            ruleset.get('source') != REPOSITORY or ruleset.get('target') != 'tag' or
+            ruleset.get('enforcement') != 'active' or ruleset.get('bypass_actors') != [] or
+            not isinstance(refs, dict) or refs.get('include') != ['refs/tags/code-health-*'] or
+            refs.get('exclude') != [] or not {'update', 'deletion'}.issubset(types)):
+        raise ValueError('tag protection ruleset is not the approved active no-bypass policy')
+
+
+def find_release(api, tag: str):
+    match = None
+    for page in range(1, 101):
+        releases = api(f'releases?per_page=100&page={page}')
+        if not isinstance(releases, list) or len(releases) > 100:
+            raise ValueError('invalid release listing')
+        for item in releases:
+            if isinstance(item, dict) and item.get('tag_name') == tag:
+                if match is not None:
+                    raise ValueError('multiple releases share the tag')
+                match = item
+        if len(releases) < 100:
+            return match
+    raise ValueError('release listing exceeds its page limit')
 
 
 def publish(asset: Path, policy_commit: str) -> None:
@@ -109,46 +140,16 @@ def publish(asset: Path, policy_commit: str) -> None:
         if not isinstance(settings, dict) or settings.get('enabled') is not True:
             raise ValueError('immutable releases are not enabled')
 
-    def require_tag_protection() -> None:
-        ruleset = api('rulesets/' + ruleset_id, admin=True)
-        if not isinstance(ruleset, dict):
-            raise ValueError('tag protection ruleset is missing')
-        conditions = ruleset.get('conditions')
-        refs = conditions.get('ref_name') if isinstance(conditions, dict) else None
-        rules = ruleset.get('rules')
-        types = {rule.get('type') for rule in rules if isinstance(rule, dict)} if isinstance(rules, list) else set()
-        if (ruleset.get('id') != int(ruleset_id) or ruleset.get('source_type') != 'Repository' or
-                ruleset.get('source') != REPOSITORY or ruleset.get('target') != 'tag' or
-                ruleset.get('enforcement') != 'active' or ruleset.get('bypass_actors') != [] or
-                not isinstance(refs, dict) or refs.get('include') != ['refs/tags/code-health-*'] or
-                refs.get('exclude') != [] or not {'update', 'deletion'}.issubset(types)):
-            raise ValueError('tag protection ruleset is not the approved active no-bypass policy')
-
     def require_current_main() -> None:
         branch = api('branches/main')
         commit = branch.get('commit') if isinstance(branch, dict) else None
         if not isinstance(commit, dict) or commit.get('sha') != policy_commit:
             raise ValueError('protected main moved before release publication')
 
-    def find_release():
-        match = None
-        for page in range(1, 101):
-            releases = api(f'releases?per_page=100&page={page}')
-            if not isinstance(releases, list) or len(releases) > 100:
-                raise ValueError('invalid release listing')
-            for item in releases:
-                if isinstance(item, dict) and item.get('tag_name') == tag:
-                    if match is not None:
-                        raise ValueError('multiple releases share the tag')
-                    match = item
-            if len(releases) < 100:
-                return match
-        raise ValueError('release listing exceeds its page limit')
-
     require_immutable_setting()
-    require_tag_protection()
+    validate_tag_protection(api('rulesets/' + ruleset_id, admin=True), ruleset_id)
     exists = tag_exists_and_matches()
-    release = find_release()
+    release = find_release(api, tag)
     if release is not None:
         inspect_release(release, allow_missing_asset=release.get('draft') is True)
         if not exists and release.get('draft') is not True:
@@ -167,7 +168,7 @@ def publish(asset: Path, policy_commit: str) -> None:
         require_current_main()
         gh('release', 'create', tag, '-R', REPOSITORY, '--target', policy_commit,
            '--verify-tag', '--draft', '--title', tag, '--notes', 'Qualified code-health policy bundle.')
-        release = find_release()
+        release = find_release(api, tag)
         if not isinstance(release, dict):
             raise ValueError('new release could not be read')
         if not tag_exists_and_matches():
@@ -179,16 +180,16 @@ def publish(asset: Path, policy_commit: str) -> None:
         if not has_asset:
             require_current_main()
             api(f"releases/{release['id']}/assets?name=policy-bundle.tar", upload=data)
-        current = find_release()
+        current = find_release(api, tag)
         if (not isinstance(current, dict) or not tag_exists_and_matches() or
                 current.get('id') != release.get('id') or current.get('draft') is not True):
             raise ValueError('release changed before publication')
         inspect_release(current, allow_missing_asset=False)
         require_immutable_setting()
-        require_tag_protection()
+        validate_tag_protection(api('rulesets/' + ruleset_id, admin=True), ruleset_id)
         require_current_main()
         api(f"releases/{release['id']}", method='PATCH', body={'draft': False})
-        release = find_release()
+        release = find_release(api, tag)
     if (not isinstance(release, dict) or not tag_exists_and_matches() or
             release.get('id') != current_id or release.get('draft') is not False or release.get('immutable') is not True):
         raise ValueError('published release is not immutable or points to the wrong commit')
