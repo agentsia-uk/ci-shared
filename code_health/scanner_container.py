@@ -89,9 +89,11 @@ def _capture(command, env):
     finally:
         if child.poll() is None:
             child.kill()
-        child.wait()
-        child.stdout.close()
-        child.stderr.close()
+        try:
+            child.wait(timeout=5)
+        finally:
+            child.stdout.close()
+            child.stderr.close()
 
 
 def _inspect(container, image, mounts, env):

@@ -44,6 +44,23 @@ class ScannerContainerTests(unittest.TestCase):
         self.assertEqual(expected, env['DOCKER_HOST'])
         self.assertNotIn('GH_TOKEN', env)
 
+    def test_capture_cleanup_wait_is_bounded(self):
+        real_popen = subprocess.Popen
+        children = []
+        def stalled_cleanup(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            original_wait = child.wait
+            def wait(timeout=None):
+                if timeout == 5:
+                    raise subprocess.TimeoutExpired(args[0], timeout)
+                return original_wait(timeout=timeout)
+            child.wait = wait
+            children.append(child)
+            return child
+        with patch('code_health.scanner_container.subprocess.Popen', side_effect=stalled_cleanup), self.assertRaises(subprocess.TimeoutExpired):
+            scanner_container._capture([sys.executable, '-c', 'print("ok")'], {'PATH': os.defpath})
+        self.assertTrue(children[0].stdout.closed)
+
     def test_automatic_removal_is_confirmed_before_accepting_a_missing_container(self):
         failed = subprocess.CompletedProcess([], 1)
         absent = subprocess.CompletedProcess([], 0, stdout=b'')

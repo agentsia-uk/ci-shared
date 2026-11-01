@@ -48,8 +48,10 @@ def read_command(argv: list[str], *, timeout: float = 120, limit: int = MAX_RESP
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        child.wait()
-        child.stdout.close()
+        try:
+            child.wait(timeout=5)
+        finally:
+            child.stdout.close()
 
 
 def ensure_gh_version() -> None:

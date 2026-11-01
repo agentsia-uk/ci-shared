@@ -62,6 +62,23 @@ class ReleaseAttestationTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             read_command([sys.executable, '-c', 'import time; time.sleep(5)'], timeout=0.1)
 
+    def test_cleanup_wait_is_bounded(self):
+        real_popen = subprocess.Popen
+        children = []
+        def stalled_cleanup(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            original_wait = child.wait
+            def wait(timeout=None):
+                if timeout == 5:
+                    raise subprocess.TimeoutExpired(args[0], timeout)
+                return original_wait(timeout=timeout)
+            child.wait = wait
+            children.append(child)
+            return child
+        with patch('code_health.release_attestation.subprocess.Popen', side_effect=stalled_cleanup), self.assertRaises(subprocess.TimeoutExpired):
+            read_command([sys.executable, '-c', 'print("ok")'])
+        self.assertTrue(children[0].stdout.closed)
+
     def test_read_only_administration_token_is_not_inherited_by_cli(self):
         with patch.dict('os.environ', {'RELEASE_ADMIN_READ_TOKEN': 'test-secret'}):
             result = read_command([sys.executable, '-c', 'import os; print("present" if "RELEASE_ADMIN_READ_TOKEN" in os.environ else "absent")'])
