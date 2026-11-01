@@ -247,6 +247,11 @@ class RatchetTests(unittest.TestCase):
             self.assertEqual({'old name.py', 'new name.py', 'removed.py'}, touched)
             self.assertEqual({'old name.py': 'new name.py'}, renames)
 
+    def test_git_runner_rejects_other_programs(self):
+        for command in ([], ['/bin/sh', '-c', 'true']):
+            with self.subTest(command=command), self.assertRaisesRegex(ValueError, 'only Git'):
+                r.run(command, cwd=Path('.'))
+
     def test_missing_config_is_distinct_from_corrupt_git_data(self):
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary).resolve()

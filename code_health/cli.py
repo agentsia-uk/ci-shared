@@ -246,10 +246,8 @@ def git_process(args, *, cwd, env=None, **kwargs):
 
 
 def run(args, *, cwd, env=None):
-    if args[0] == 'git':
-        result = git_process(args[1:], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    else:
-        result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=1800)
+    require(isinstance(args, list) and args and args[0] == 'git', 'only Git commands are supported')
+    result = git_process(args[1:], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     return result.stdout
 
 
