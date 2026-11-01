@@ -22,8 +22,7 @@ runs:
         POLICY_ROOT: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        version=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["POLICY_ROOT"])/"policy.json").read_text())["desloppifyVersion"])')
-        python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
+        python -m pip install --disable-pip-version-check --require-hashes -r "${POLICY_ROOT}/requirements.lock"
         python "${POLICY_ROOT}/scanner_patch.py"
     - name: Compare full scans
       shell: bash

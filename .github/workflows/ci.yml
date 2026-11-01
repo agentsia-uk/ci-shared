@@ -41,8 +41,7 @@ jobs:
           python-version: '3.13'
       - name: Install scanner and run policy regressions
         run: |
-          version=$(python -c 'import json; print(json.load(open("code_health/policy.json"))["desloppifyVersion"])')
-          python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
+          python -m pip install --disable-pip-version-check --require-hashes -r code_health/requirements.lock
           python code_health/scanner_patch.py
           python -m unittest discover -s tests -v
 
