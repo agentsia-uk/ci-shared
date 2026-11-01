@@ -2,7 +2,7 @@ import json
 import unittest
 
 from code_health import cli, qualification_bridge
-from code_health.qualification_controller import evaluate_observation, pure_cases, run_pure_cases
+from code_health.qualification_controller import evaluate_observation, qualification_cases, run_qualification_cases
 from code_health.qualification_protocol import decode_observation
 
 
@@ -13,15 +13,15 @@ def simulated_runner(*, image, candidate, bridge, case_id, request):
 
 
 class QualificationControllerTests(unittest.TestCase):
-    def test_current_policy_matches_all_pure_cases_in_local_simulation(self):
-        self.assertEqual(run_pure_cases(image=None, candidate=None, bridge=None, runner=simulated_runner), len(pure_cases()))
-        self.assertEqual(len(pure_cases()), 17)
+    def test_current_policy_matches_all_qualification_cases_in_local_simulation(self):
+        self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, runner=simulated_runner), len(qualification_cases()))
+        self.assertEqual(len(qualification_cases()), 20)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):
             return {'schemaVersion': 1, 'caseId': kwargs['case_id'], 'outcome': 'returned', 'value': None, 'passed': True}
         with self.assertRaisesRegex(ValueError, 'expected case'):
-            run_pure_cases(image=None, candidate=None, bridge=None, runner=forged)
+            run_qualification_cases(image=None, candidate=None, bridge=None, runner=forged)
         observation = {'schemaVersion': 1, 'caseId': 'wrong-case', 'outcome': 'returned', 'value': None}
         with self.assertRaisesRegex(ValueError, 'expected case'):
             evaluate_observation(observation, 'config-valid', 'returned')
@@ -30,10 +30,10 @@ class QualificationControllerTests(unittest.TestCase):
         def always_accept(**kwargs):
             return {'schemaVersion': 1, 'caseId': kwargs['case_id'], 'outcome': 'returned', 'value': None}
         with self.assertRaisesRegex(ValueError, 'disagrees'):
-            run_pure_cases(image=None, candidate=None, bridge=None, runner=always_accept)
+            run_qualification_cases(image=None, candidate=None, bridge=None, runner=always_accept)
         observation = {'schemaVersion': 1, 'caseId': 'score-decreased', 'outcome': 'returned', 'value': {'errors': []}}
         with self.assertRaisesRegex(ValueError, 'disagrees'):
-            expected = next(case[3] for case in pure_cases() if case[0] == 'score-decreased')
+            expected = next(case[3] for case in qualification_cases() if case[0] == 'score-decreased')
             evaluate_observation(observation, 'score-decreased', expected)
         observation['value'] = {**expected, 'errors': ['unrelated failure']}
         with self.assertRaisesRegex(ValueError, 'disagrees'):
@@ -43,6 +43,16 @@ class QualificationControllerTests(unittest.TestCase):
         request = {'schemaVersion': 1, 'caseId': 'unknown', 'operation': 'not-a-policy-operation', 'arguments': {}}
         with self.assertRaises(RuntimeError):
             qualification_bridge.observe(request, cli)
+
+    def test_unrelated_snapshot_error_is_not_counted_as_symlink_protection(self):
+        class BrokenSnapshot:
+            @staticmethod
+            def snapshot(*_args):
+                raise ValueError('unrelated failure')
+        request = {'schemaVersion': 1, 'caseId': 'git-snapshot-escape',
+                   'operation': 'git-snapshot', 'arguments': {'escape': True}}
+        with self.assertRaisesRegex(ValueError, 'unrelated failure'):
+            qualification_bridge.observe(request, BrokenSnapshot())
 
 
 if __name__ == '__main__':

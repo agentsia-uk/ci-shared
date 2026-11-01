@@ -1,6 +1,6 @@
 """Trusted, independently defined assertions for candidate policy observations.
 
-The current inventory covers pure configuration and ratchet operations only.
+The current inventory covers configuration, ratchet and selected Git operations only.
 It deliberately cannot issue a release qualification receipt.
 """
 import copy
@@ -29,7 +29,7 @@ def _expected_comparison(score_after=90, errors=()):
             'coverage': 'full', 'errors': list(errors)}
 
 
-def pure_cases():
+def qualification_cases():
     """Return independent test inputs and expected observations, never candidate code."""
     valid = _config()
     traversal = copy.deepcopy(valid)
@@ -67,6 +67,12 @@ def pure_cases():
         ('subjective-not-gated', 'compare', _compare(after=[subjective]), _expected_comparison()),
         ('invalid-score', 'compare', _compare(score_after=True), 'rejected'),
         ('invalid-coverage', 'compare', bad_coverage, 'rejected'),
+        ('git-snapshot-exact', 'git-snapshot', {'escape': False},
+         {'source': 'def handle(value):\n    return eval(value)\n', 'substitution': 'COMMIT = "$Format:%H$"\n',
+          'executable': 0o755, 'internalIsLink': True, 'internalContent': 'def handle(value):\n    return eval(value)\n'}),
+        ('git-snapshot-escape', 'git-snapshot', {'escape': True}, 'rejected'),
+        ('git-renames-deletions', 'git-changed-paths', {},
+         {'touched': ['new name.py', 'old name.py', 'removed.py'], 'renames': {'old name.py': 'new name.py'}}),
     ]
 
 
@@ -82,15 +88,15 @@ def evaluate_observation(observation, expected_case, expected):
         return
     value = observation.get('value')
     if observation.get('outcome') != 'returned' or not isinstance(value, dict) or not isinstance(expected, dict):
-        raise ValueError('candidate returned an invalid ratchet observation')
+        raise ValueError('candidate returned an invalid structured observation')
     if value != expected:
         raise ValueError('candidate disagrees with the trusted qualification case')
 
 
-def run_pure_cases(*, image, candidate, bridge, runner=run_candidate):
-    """Exercise the current pure cases; this is not a complete qualification."""
+def run_qualification_cases(*, image, candidate, bridge, runner=run_candidate):
+    """Exercise the current cases; this is not a complete qualification."""
     completed = 0
-    for case_id, operation, arguments, expected in pure_cases():
+    for case_id, operation, arguments, expected in qualification_cases():
         request = {'schemaVersion': 1, 'caseId': case_id, 'operation': operation, 'arguments': arguments}
         observation = runner(image=image, candidate=candidate, bridge=bridge, case_id=case_id, request=request)
         evaluate_observation(observation, case_id, expected)
