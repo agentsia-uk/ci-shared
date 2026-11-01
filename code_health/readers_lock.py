@@ -170,7 +170,7 @@ def unpack_archive(data: bytes, *, lock: ReaderLock, platform: str, destination_
                 if (not entry.isfile() or not filename.fullmatch(name) or name in seen
                         or type(entry.size) is not int or not 0 < entry.size <= MAX_READER_BYTES
                         or len(seen) >= MAX_READER_FILES or total + entry.size > MAX_EXPANDED_BYTES):
-                    raise ValueError('unsafe reader archive entry')
+                    raise ValueError(f'unsafe reader archive entry: {name[:120]!r}, type={entry.type!r}, size={entry.size}')
                 total += entry.size
                 stream = archive.extractfile(entry)
                 if stream is None:
