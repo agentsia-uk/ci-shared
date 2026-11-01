@@ -27,12 +27,14 @@ class ReaderIntegrationTests(unittest.TestCase):
                         files = readers_lock.unpack_archive(data, lock=lock, platform=archive.platform, destination_fd=fd)
                     finally:
                         os.close(fd)
-                    if archive.platform == 'linux-x86_64':
-                        pack.configure(cache_dir=directory)
-                        self.assertTrue(readers_lock.required_grammars() <= set(pack.downloaded_languages()))
                     platform_readers[archive.platform] = {name.rsplit('.', 1)[0] for name in files}
-        self.assertEqual(platform_readers['linux-x86_64'], platform_readers['linux-aarch64'])
-        self.assertEqual(platform_readers['linux-x86_64'], platform_readers['macos-arm64'])
+        for platform, names in platform_readers.items():
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory(prefix='reader-inventory-') as inventory:
+                for name in names:
+                    (Path(inventory) / (name + '.so')).touch()
+                pack.configure(cache_dir=inventory)
+                missing = readers_lock.required_grammars() - set(pack.downloaded_languages())
+                self.assertFalse(missing, f'{platform} is missing scanner readers: {sorted(missing)}')
 
 
 if __name__ == '__main__':
