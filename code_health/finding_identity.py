@@ -96,8 +96,13 @@ class FindingIdentity:
                 evidence.append((hashlib.sha256(text.encode()).hexdigest(), line - node.lineno))
             proof = 'unique-unchanged-python-scope'
         else:
-            nodes = [node for node in tree.root_node.named_children if node.type != 'comment'
-                     and node.start_point.row <= line - 1 <= node.end_point.row]
+            def contains_line(node):
+                end_row = node.end_point.row
+                if node.end_point.column == 0 and end_row > node.start_point.row:
+                    end_row -= 1
+                return node.start_point.row <= line - 1 <= end_row
+            nodes = [node for node in tree.root_node.named_children
+                     if node.type != 'comment' and contains_line(node)]
             if len(nodes) != 1:
                 return uncertain
             node = nodes[0]
