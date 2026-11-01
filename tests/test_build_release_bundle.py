@@ -8,7 +8,7 @@ import tarfile
 from pathlib import Path
 from unittest.mock import patch
 
-from code_health.build_release_bundle import build_bundle, read_reader_archives, runtime_files
+from code_health.build_release_bundle import ReaderRedirect, build_bundle, read_reader_archives, runtime_files
 from code_health.release_bundle import read_bundle
 from code_health.readers_lock import ASSET_NAMES
 from tests.test_readers_lock import fixture as readers_fixture, encoded
@@ -62,6 +62,27 @@ class BuildReleaseBundleTests(unittest.TestCase):
                          {**self.payloads, 'linux-x86_64': b'changed'}):
             with self.subTest(archives=archives), self.assertRaises(ValueError):
                 build_bundle(self.root, self.commit, FILES, reader_archives=archives)
+
+    def test_release_downloads_and_verifies_the_locked_archives(self):
+        def open_archive(url, *, timeout):
+            platform = url.rsplit('parsers-', 1)[1].removesuffix('.tar.zst')
+            self.assertEqual(timeout, 60)
+            return io.BytesIO(self.payloads[platform])
+        with patch('code_health.build_release_bundle.urllib.request.build_opener') as opener:
+            opener.return_value.open.side_effect = open_archive
+            data = build_bundle(self.root, self.commit, FILES, download_readers=True)
+            read_bundle(data, policy_commit=self.commit, allowed_files=FILES)
+            opener.return_value.open.return_value = io.BytesIO(b'wrong')
+            opener.return_value.open.side_effect = None
+            with self.assertRaisesRegex(ValueError, 'approved lock'):
+                build_bundle(self.root, self.commit, FILES, download_readers=True)
+
+    def test_reader_download_refuses_untrusted_redirects(self):
+        redirect = ReaderRedirect()
+        for url in ('http://github.com/file', 'https://example.com/file',
+                    'https://github.com@evil.example/file', 'https://github.com:444/file'):
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, 'redirect is not trusted'):
+                redirect.redirect_request(None, None, 302, '', {}, url)
 
     def test_reader_archive_input_refuses_symlinks(self):
         directory = self.root / 'readers'

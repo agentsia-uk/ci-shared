@@ -3,9 +3,9 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-import urllib.request
 
 from code_health import readers_lock
+from code_health.build_release_bundle import download_reader_archives
 
 
 @unittest.skipUnless(os.environ.get('CODE_HEALTH_READER_INTEGRATION') == '1', 'hosted reader integration only')
@@ -17,14 +17,14 @@ class ReaderIntegrationTests(unittest.TestCase):
         lock = readers_lock.verify_selected_manifest((root / 'readers-lock.json').read_bytes(),
                                                      (root / 'readers-upstream.json').read_bytes())
         platform_readers = {}
+        archives = download_reader_archives(lock)
         for archive in lock.archives:
             with self.subTest(platform=archive.platform):
-                with urllib.request.urlopen(archive.url, timeout=60) as response:
-                    data = response.read(readers_lock.MAX_ARCHIVE_BYTES + 1)
                 with tempfile.TemporaryDirectory(prefix='verified-readers-') as directory:
                     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                     try:
-                        files = readers_lock.unpack_archive(data, lock=lock, platform=archive.platform, destination_fd=fd)
+                        files = readers_lock.unpack_archive(archives[archive.platform], lock=lock,
+                                                            platform=archive.platform, destination_fd=fd)
                     finally:
                         os.close(fd)
                     platform_readers[archive.platform] = {name.rsplit('.', 1)[0] for name in files}

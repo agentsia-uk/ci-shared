@@ -198,7 +198,8 @@ lock targets Python 3.13 on Linux x86-64 or ARM64 with glibc 2.34 or newer.
 
 The reader lock pins the upstream manifest and platform archive hashes. The
 bundle builder requires both exact Linux reader archives and includes them with
-the metadata; the bundle verifier checks their bytes against that lock. No
+the metadata; it can download the public archives automatically with
+`--download-readers`. The bundle verifier checks their bytes against that lock. No
 release workflow has yet qualified or activated the bundled readers. The scanner
 still needs a read-only runtime and complete release qualification.
 Trusted scans run only on Linux; the planned macOS publisher will validate and

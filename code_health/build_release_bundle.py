@@ -9,11 +9,38 @@ import stat
 from pathlib import Path, PurePosixPath
 import subprocess
 import tarfile
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from .release_bundle import COMMIT, MAX_BUNDLE_BYTES
 from .readers_lock import ASSET_NAMES, MAX_ARCHIVE_BYTES, PLATFORMS, locked_package_version, verify_archive, verify_manifest
 
 RUNTIME_SOURCE = re.compile(r'code_health/[a-z_][a-z0-9_]*\.py\Z')
+
+
+class ReaderRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urlsplit(newurl)
+        if (target.scheme != 'https' or target.hostname not in {'github.com', 'release-assets.githubusercontent.com'}
+                or target.username is not None or target.password is not None or target.port not in (None, 443)):
+            raise ValueError('reader download redirect is not trusted')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def download_reader_archives(lock):
+    """Download public archives and verify each against an authenticated lock."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), ReaderRedirect())
+    archives = {}
+    for entry in lock.archives:
+        expected = ('https://github.com/kreuzberg-dev/tree-sitter-language-pack/releases/download/v'
+                    + lock.version + '/parsers-' + entry.platform + '.tar.zst')
+        if entry.platform not in PLATFORMS or entry.url != expected:
+            raise ValueError('reader download URL is not trusted')
+        with opener.open(entry.url, timeout=60) as response:
+            data = response.read(MAX_ARCHIVE_BYTES + 1)
+        archives[entry.platform] = verify_archive(data, lock=lock, platform=entry.platform)
+    return archives
 
 
 def runtime_files(repo: str | os.PathLike[str], commit: str) -> set[str]:
@@ -39,7 +66,8 @@ def runtime_files(repo: str | os.PathLike[str], commit: str) -> set[str]:
     return result
 
 
-def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[str], *, reader_archives=None) -> bytes:
+def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[str], *, reader_archives=None,
+                 download_readers=False) -> bytes:
     if not COMMIT.fullmatch(commit):
         raise ValueError('release commit must be a full SHA')
     required = {'code_health/policy.json', 'code_health/requirements.lock'}
@@ -84,6 +112,10 @@ def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[s
             raise ValueError('reader metadata is missing or undeclared')
         lock = verify_manifest(files['code_health/readers-lock.json'], files['code_health/readers-upstream.json'],
                                package_version=locked_package_version(files['code_health/requirements.lock']), grammars=set())
+        if download_readers:
+            if reader_archives is not None:
+                raise ValueError('choose one reader archive source')
+            reader_archives = download_reader_archives(lock)
         if (not isinstance(reader_archives, dict) or set(reader_archives) != PLATFORMS
                 or not set(ASSET_NAMES.values()) <= paths):
             raise ValueError('verified reader archives are missing')
@@ -93,7 +125,7 @@ def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[s
             if total > MAX_BUNDLE_BYTES:
                 raise ValueError('policy source and readers exceed the size limit')
             files[name] = data
-    elif reader_archives is not None or paths & set(ASSET_NAMES.values()):
+    elif reader_archives is not None or download_readers or paths & set(ASSET_NAMES.values()):
         raise ValueError('reader archives have no declared metadata')
     version = policy.get('desloppifyVersion') if isinstance(policy, dict) else None
     if not isinstance(version, str) or not version:
@@ -145,9 +177,11 @@ def main() -> None:
     parser.add_argument('--commit', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reader-directory', type=Path)
+    parser.add_argument('--download-readers', action='store_true')
     args = parser.parse_args()
     archives = read_reader_archives(args.reader_directory) if args.reader_directory is not None else None
-    data = build_bundle(args.repo, args.commit, runtime_files(args.repo, args.commit), reader_archives=archives)
+    data = build_bundle(args.repo, args.commit, runtime_files(args.repo, args.commit), reader_archives=archives,
+                        download_readers=args.download_readers)
     fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'wb') as output:
         output.write(data)
