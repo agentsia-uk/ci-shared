@@ -126,8 +126,8 @@ def _scanner_fixture(policy, operation):
         def inside_sandbox(*, image, source, readers, output, arguments):
             del image, readers
             executable = str(Path(sys.executable))
-            program = ('import runpy,sys; sys.path.insert(0,"/opt/code-health"); '
-                       'runpy.run_module("code_health.scanner_entrypoint",run_name="__main__")')
+            program = ('import sys; sys.path.insert(0,"/opt/code-health"); '
+                       'from code_health.scanner_entrypoint import main; sys.exit(main())')
             args = [str(output / 'state.json') if arg == '/output/state.json' else arg for arg in arguments]
             env = {'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
                    'HOME': str(root), 'DESLOPPIFY_ROOT': str(source), 'CI': 'true', 'NO_COLOR': '1',

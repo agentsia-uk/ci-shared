@@ -3,6 +3,7 @@ import ctypes
 import os
 import signal
 import stat
+import subprocess
 import sys
 
 import tree_sitter_language_pack as readers
@@ -12,6 +13,79 @@ from .readers_lock import required_grammars
 
 READER_DIR = '/opt/code-health/readers'
 OUTPUT_DIR = '/output'
+OUTPUT_NAME = '.scanner-stdout'
+MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+
+
+def capture_to_file(command, directory):
+    temporary = os.path.join(directory, OUTPUT_NAME + '.tmp')
+    final = os.path.join(directory, OUTPUT_NAME)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    identity = os.fstat(fd)
+    child = None
+    previous = signal.getsignal(signal.SIGTERM)
+    def interrupted(_signum, _frame):
+        raise InterruptedError('scanner cancelled')
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        child = subprocess.Popen(command, stdout=subprocess.PIPE)
+        total = 0
+        while True:
+            chunk = os.read(child.stdout.fileno(), min(65536, MAX_OUTPUT_BYTES - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_OUTPUT_BYTES:
+                raise ValueError('scanner output exceeds its size limit')
+            remaining = memoryview(chunk)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise ValueError('scanner output made no progress')
+                remaining = remaining[written:]
+        if child.wait() != 0:
+            raise ValueError('scanner worker failed')
+        os.fsync(fd)
+        current = os.lstat(temporary)
+        if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+            raise ValueError('scanner output identity changed')
+        os.link(temporary, final, follow_symlinks=False)
+        linked = os.lstat(final)
+        if (linked.st_dev, linked.st_ino) != (identity.st_dev, identity.st_ino):
+            raise ValueError('scanner output publication changed')
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            if child is not None:
+                try:
+                    if child.poll() is None:
+                        try:
+                            child.terminate()
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            child.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                child.kill()
+                            except ProcessLookupError:
+                                pass
+                    child.wait(timeout=5)
+                finally:
+                    child.stdout.close()
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+            os.close(fd)
+            try:
+                current = os.lstat(temporary)
+                if (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
+                    os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
 
 def make_output_accessible(root):
@@ -65,4 +139,5 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    program = "import sys; sys.path.insert(0, '/opt/code-health'); from code_health.scanner_entrypoint import main; sys.exit(main())"
+    capture_to_file([sys.executable, '-I', '-B', '-c', program, *sys.argv[1:]], OUTPUT_DIR)

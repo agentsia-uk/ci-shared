@@ -17,6 +17,7 @@ from . import scanner_recovery
 IMAGE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 CONTAINER = re.compile(r'[0-9a-f]{64}\Z')
 MAX_LOG_BYTES = 64 * 1024 * 1024
+OUTPUT_NAME = '.scanner-stdout'
 CONTAINER_USER = '10001:10001'
 
 
@@ -94,6 +95,32 @@ def _capture(command, env):
         finally:
             child.stdout.close()
             child.stderr.close()
+
+
+def _read_output(directory):
+    target = Path(directory) / OUTPUT_NAME
+    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_LOG_BYTES:
+            raise ValueError('invalid scanner output file')
+        chunks, remaining = [], before.st_size
+        while remaining:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                raise ValueError('scanner output is truncated')
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(fd)
+        current = target.lstat()
+        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) or
+                (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)):
+            raise ValueError('scanner output changed while reading')
+        target.unlink()
+        return b''.join(chunks)
+    finally:
+        os.close(fd)
 
 
 def _inspect(container, image, mounts, env):
@@ -193,7 +220,8 @@ def run_scanner(*, image, source, readers, output, arguments):
                 if not CONTAINER.fullmatch(created) or _container_id(cidfile) != created:
                     raise ValueError('invalid scanner container identity')
                 _inspect(created, image, mounts, env)
-                return _capture([DOCKER, 'start', '--attach', created], env)
+                _capture([DOCKER, 'start', '--attach', created], env)
+                return _read_output(paths[2])
             finally:
                 recorded = _container_id(cidfile)
                 if recorded is not None:

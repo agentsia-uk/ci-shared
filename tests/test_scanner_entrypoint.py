@@ -1,4 +1,5 @@
 import unittest
+import sys
 from pathlib import Path
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -7,6 +8,24 @@ from code_health import scanner_entrypoint
 
 
 class ScannerEntrypointTests(unittest.TestCase):
+    def test_capture_writes_complete_output_and_refuses_partial_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = lambda script: scanner_entrypoint.capture_to_file([sys.executable, '-c', script], directory)
+            run('print("complete")')
+            output = root / scanner_entrypoint.OUTPUT_NAME
+            self.assertEqual(output.read_bytes(), b'complete\n')
+            with self.assertRaises(FileExistsError):
+                run('print("overwrite")')
+            self.assertEqual(output.read_bytes(), b'complete\n')
+            output.unlink()
+            with self.assertRaisesRegex(ValueError, 'worker failed'):
+                run('import sys; print("partial"); sys.exit(1)')
+            self.assertFalse(output.exists())
+            with patch.object(scanner_entrypoint, 'MAX_OUTPUT_BYTES', 4), self.assertRaisesRegex(ValueError, 'exceeds'):
+                run('print("too long")')
+            self.assertEqual(list(root.iterdir()), [])
+
     def test_output_handoff_preserves_links_without_following_them(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

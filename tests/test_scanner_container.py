@@ -13,6 +13,54 @@ from code_health import scanner_container
 
 
 class ScannerContainerTests(unittest.TestCase):
+    def test_output_file_is_bounded_and_never_follows_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / scanner_container.OUTPUT_NAME
+            output.write_bytes(b'complete')
+            self.assertEqual(scanner_container._read_output(root), b'complete')
+            self.assertFalse(output.exists())
+            source = root / 'source'
+            source.write_bytes(b'keep')
+            output.symlink_to(source)
+            with self.assertRaises(OSError):
+                scanner_container._read_output(root)
+            self.assertEqual(source.read_bytes(), b'keep')
+            output.unlink()
+            os.link(source, output)
+            with self.assertRaisesRegex(ValueError, 'invalid scanner output'):
+                scanner_container._read_output(root)
+            output.unlink()
+            output.write_bytes(b'12345')
+            with patch.object(scanner_container, 'MAX_LOG_BYTES', 4), self.assertRaisesRegex(ValueError, 'invalid scanner output'):
+                scanner_container._read_output(root)
+            output.unlink()
+            os.mkfifo(output)
+            with self.assertRaisesRegex(ValueError, 'invalid scanner output'):
+                scanner_container._read_output(root)
+
+    def test_result_does_not_depend_on_attached_transport_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source, readers, output = (root / name for name in ('source', 'readers', 'output'))
+            for path in (source, readers, output):
+                path.mkdir(mode=0o700)
+            def docker(command, **_kwargs):
+                if 'create' in command:
+                    Path(command[command.index('--cidfile') + 1]).write_text('a' * 64)
+                return subprocess.CompletedProcess(command, 0, stdout=b'a' * 64)
+            def lost_output(*_args):
+                (output / scanner_container.OUTPUT_NAME).write_bytes(b'valid result')
+                return b''
+            with patch.object(scanner_container.os, 'geteuid', return_value=root.stat().st_uid), \
+                    patch.object(scanner_container, '_require_seccomp'), \
+                    patch.object(scanner_container.scanner_recovery, 'labels', return_value={}), \
+                    patch.object(scanner_container, '_inspect'), \
+                    patch.object(scanner_container.subprocess, 'run', side_effect=docker), \
+                    patch.object(scanner_container, '_capture', side_effect=lost_output):
+                self.assertEqual(scanner_container.run_scanner(image='sha256:' + 'b' * 64, source=source,
+                                 readers=readers, output=output, arguments=[]), b'valid result')
+
     def test_mount_permissions_preserve_executables_and_never_follow_links(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
