@@ -52,6 +52,32 @@ class PolicyTests(unittest.TestCase):
         c['areas'][0]['exclusions'] = [{'pattern': 'dist', 'kind': 'build', 'rationale': 'compiler output'}]
         r.validate_config(c)
 
+    def test_scope_rejects_universal_globs_and_noncanonical_paths(self):
+        from desloppify.base.discovery.file_paths import matches_exclusion
+        for pattern in ['***', '*?*', '**/**', '*/*', '**/**/**']:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(matches_exclusion('src/lib/example.py', pattern))
+                if '/' not in pattern:
+                    self.assertTrue(matches_exclusion('example.py', pattern))
+                c = config()
+                c['areas'][0]['exclusions'] = [{'pattern': pattern, 'kind': 'build', 'rationale': 'synthetic'}]
+                with self.assertRaises(ValueError):
+                    r.validate_config(c)
+        for pattern in ['./**/*', '**///*', 'src/./build', 'dist/']:
+            c = config()
+            c['areas'][0]['exclusions'] = [{'pattern': pattern, 'kind': 'build', 'rationale': 'synthetic'}]
+            with self.subTest(pattern=pattern), self.assertRaises(ValueError):
+                r.validate_config(c)
+        for path in ['./src', 'src/', 'src//lib', 'src/./lib']:
+            c = config()
+            c['areas'][0]['path'] = path
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                r.validate_config(c)
+        for pattern in ['dist', '**/generated/**', '*.generated.ts']:
+            c = config()
+            c['areas'][0]['exclusions'] = [{'pattern': pattern, 'kind': 'generated', 'rationale': 'synthetic'}]
+            r.validate_config(c)
+
     def test_duplicate_unknown_fields_and_mutable_pin_rejected(self):
         cases = [dict(config(), policyRef='main'), dict(config(), ignore=['*']), dict(config(), areas=[])]
         c = config()

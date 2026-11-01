@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 66f579540726884955af2e5f1be324ae5cc15b47
+          ref: 08d338db420c658a5b55244403ff8916d027dfc7
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -84,7 +84,7 @@ jobs:
           python-version: '3.13'
       - name: Test the isolated candidate and its independent controller
         run: |
-          test "$(git rev-parse HEAD)" = 66f579540726884955af2e5f1be324ae5cc15b47
+          test "$(git rev-parse HEAD)" = 08d338db420c658a5b55244403ff8916d027dfc7
           tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-qualifier.XXXXXXXX")
           python -I -m venv "$tool_dir"
           "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
@@ -105,7 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 66f579540726884955af2e5f1be324ae5cc15b47
+          ref: 08d338db420c658a5b55244403ff8916d027dfc7
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -117,7 +117,7 @@ jobs:
           python-version: '3.13'
       - name: Collect bounded observations without release credentials
         run: |
-          test "$(git rev-parse HEAD)" = 66f579540726884955af2e5f1be324ae5cc15b47
+          test "$(git rev-parse HEAD)" = 08d338db420c658a5b55244403ff8916d027dfc7
           tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-qualifier.XXXXXXXX")
           python -I -m venv "$tool_dir"
           "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
@@ -144,7 +144,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 66f579540726884955af2e5f1be324ae5cc15b47
+          ref: 08d338db420c658a5b55244403ff8916d027dfc7
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -160,7 +160,7 @@ jobs:
           path: ${{ runner.temp }}/qualification-input
       - name: Rebuild the candidate and verify every observation
         run: |
-          test "$(git rev-parse HEAD)" = 66f579540726884955af2e5f1be324ae5cc15b47
+          test "$(git rev-parse HEAD)" = 08d338db420c658a5b55244403ff8916d027dfc7
           tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-verdict.XXXXXXXX")
           python -I -m venv "$tool_dir"
           "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock

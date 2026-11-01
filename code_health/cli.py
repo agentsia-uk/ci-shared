@@ -66,9 +66,11 @@ def relative_path(value, *, pattern=False):
     require(isinstance(value, str) and value and '\\' not in value, 'expected a relative POSIX path')
     p = PurePosixPath(value)
     require(not p.is_absolute() and '..' not in p.parts, 'path escapes the repository')
+    require(p.as_posix() == value, 'path must use its canonical POSIX spelling')
     require(not any(ord(c) < 32 for c in value), 'control characters in path')
     if pattern:
-        require(value not in {'.', '*', '**', '**/*'}, 'an exclusion cannot hide the whole area')
+        universal = all('*' in part and set(part) <= {'*', '?'} and part.count('?') <= 1 for part in p.parts)
+        require(not universal, 'an exclusion cannot hide the whole area')
     else:
         require(not any(c in value for c in '*?['), 'area paths must be literal')
     return value
