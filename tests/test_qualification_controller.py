@@ -15,7 +15,7 @@ def simulated_runner(*, image, candidate, bridge, case_id, request):
 class QualificationControllerTests(unittest.TestCase):
     def test_current_policy_matches_all_qualification_cases_in_local_simulation(self):
         self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, runner=simulated_runner), len(qualification_cases()))
-        self.assertEqual(len(qualification_cases()), 22)
+        self.assertEqual(len(qualification_cases()), 26)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):
@@ -63,6 +63,16 @@ class QualificationControllerTests(unittest.TestCase):
         observation['value'] = {**expected, 'securityCoverage': 'reduced'}
         with self.assertRaisesRegex(ValueError, 'disagrees'):
             evaluate_observation(observation, 'scanner-security', expected)
+
+    def test_unrelated_workflow_error_is_not_counted_as_pin_enforcement(self):
+        class BrokenWorkflow:
+            @staticmethod
+            def validate_workflow_pin(*_args):
+                raise ValueError('unrelated failure')
+        request = {'schemaVersion': 1, 'caseId': 'workflow-mutable',
+                   'operation': 'workflow-pin', 'arguments': {'mode': 'mutable'}}
+        with self.assertRaisesRegex(ValueError, 'unrelated failure'):
+            qualification_bridge.observe(request, BrokenWorkflow())
 
 
 if __name__ == '__main__':

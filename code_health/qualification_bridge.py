@@ -11,21 +11,26 @@ import tempfile
 MAX_REQUEST_BYTES = 64 * 1024
 
 
+def _fixture_git(repo, root):
+    env = {'PATH': '/usr/bin:/bin', 'HOME': str(root), 'GIT_CONFIG_NOSYSTEM': '1',
+           'GIT_CONFIG_GLOBAL': '/dev/null', 'LC_ALL': 'C'}
+
+    def git(*args):
+        return subprocess.run(['/usr/bin/git', *args], cwd=repo, env=env, check=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20).stdout.decode().strip()
+
+    git('init', '-q')
+    git('config', 'user.name', 'qualification-test')
+    git('config', 'user.email', 'test@example.invalid')
+    return git
+
+
 def _git_fixture(policy, operation, escape):
     with tempfile.TemporaryDirectory(prefix='qualification-git-') as temporary:
         root = Path(temporary)
         repo = root / 'repo'
         repo.mkdir()
-        env = {'PATH': '/usr/bin:/bin', 'HOME': str(root), 'GIT_CONFIG_NOSYSTEM': '1',
-               'GIT_CONFIG_GLOBAL': '/dev/null', 'LC_ALL': 'C'}
-
-        def git(*args):
-            return subprocess.run(['/usr/bin/git', *args], cwd=repo, env=env, check=True,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20).stdout.decode().strip()
-
-        git('init', '-q')
-        git('config', 'user.name', 'qualification-test')
-        git('config', 'user.email', 'test@example.invalid')
+        git = _fixture_git(repo, root)
         if operation == 'git-snapshot':
             (repo / 'unsafe.py').write_text('def handle(value):\n    return eval(value)\n')
             (repo / 'substitution.py').write_text('COMMIT = "$Format:%H$"\n')
@@ -55,6 +60,26 @@ def _git_fixture(policy, operation, escape):
         git('commit', '-qm', 'after')
         touched, renames = policy.changed_paths(repo, base, git('rev-parse', 'HEAD'))
         return {'touched': sorted(touched), 'renames': renames}
+
+
+def _workflow_fixture(policy, mode):
+    with tempfile.TemporaryDirectory(prefix='qualification-workflow-') as temporary:
+        root = Path(temporary)
+        repo = root / 'repo'
+        repo.mkdir()
+        git = _fixture_git(repo, root)
+        workflow = repo / '.github/workflows/health.yml'
+        workflow.parent.mkdir(parents=True)
+        events = 'on: [pull_request, merge_group]\n'
+        if mode == 'filtered':
+            events = 'on:\n  pull_request:\n    paths: [src/**]\n  merge_group: {}\n'
+        reference = 'main' if mode == 'mutable' else 'b' * 40
+        condition = '    if: false\n' if mode == 'conditional' else ''
+        workflow.write_text(events + 'jobs:\n  health:\n' + condition +
+                            '    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + reference + '\n')
+        git('add', '.')
+        git('commit', '-qm', 'workflow fixture')
+        policy.validate_workflow_pin(repo, git('rev-parse', 'HEAD'), '.github/workflows/health.yml', 'b' * 40)
 
 
 def _scanner_fixture(policy, operation):
@@ -103,12 +128,22 @@ def observe(request, policy):
             value = _git_fixture(policy, operation, args['escape'])
         elif operation == 'git-changed-paths' and not args:
             value = _git_fixture(policy, operation, False)
+        elif (operation == 'workflow-pin' and set(args) == {'mode'} and isinstance(args['mode'], str) and
+              args['mode'] in {'valid', 'mutable', 'conditional', 'filtered'}):
+            _workflow_fixture(policy, args['mode'])
+            value = None
         elif operation in {'scanner-new-area', 'scanner-security'} and not args:
             value = _scanner_fixture(policy, operation)
         else:
             raise RuntimeError('unknown qualification operation')
     except ValueError as error:
         if operation == 'git-snapshot' and args.get('escape') is True and 'symlink escapes' not in str(error):
+            raise
+        expected_workflow_error = {'mutable': 'does not match workflowRef',
+                                   'conditional': 'may not be conditional or advisory',
+                                   'filtered': 'may not filter PR or merge-group events'}
+        if (operation == 'workflow-pin' and args.get('mode') in expected_workflow_error and
+                expected_workflow_error[args['mode']] not in str(error)):
             raise
         return {'schemaVersion': 1, 'caseId': request['caseId'], 'outcome': 'rejected', 'value': None}
     return {'schemaVersion': 1, 'caseId': request['caseId'], 'outcome': 'returned', 'value': value}
