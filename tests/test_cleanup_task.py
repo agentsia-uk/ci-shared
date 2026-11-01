@@ -44,6 +44,18 @@ class CleanupTaskTests(unittest.TestCase):
             self.assertEqual('keep', next(root.glob('.code-health-cleanup-*/owned/sentinel')).read_text())
             self.assertTrue((root / 'original').is_dir())
 
+    def test_recovery_accepts_the_same_task_names_as_cleanup(self):
+        from code_health.scanner_recovery import _task
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            task = root / 'code-health-task.Ab_12345'
+            task.mkdir(mode=0o700)
+            metadata = task.stat()
+            identity = f'{metadata.st_dev}:{metadata.st_ino}'
+            self.assertEqual(task, _task(root, task, identity))
+            cleanup(root, task, identity)
+            self.assertFalse(task.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

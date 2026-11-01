@@ -6,12 +6,11 @@ import re
 import stat
 import subprocess
 
-from .cleanup_task import cleanup
+from .cleanup_task import TASK_NAME, cleanup
 from .qualification_container import DOCKER, ENVIRONMENT
 
 PREFIX = 'org.agentsia.code-health.'
 SHA = re.compile(r'[0-9a-f]{64}\Z')
-TASK = re.compile(r'code-health-task\.[A-Za-z0-9_]{8}\Z')
 IDENTITY = re.compile(r'[0-9]+:[0-9]+\Z')
 BOOT = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
 
@@ -43,7 +42,7 @@ def _namespace():
 def _task(parent, path, identity, *, missing_ok=False):
     parent = Path(parent).resolve(strict=True)
     path = Path(path).absolute()
-    if path.parent != parent or not TASK.fullmatch(path.name) or not IDENTITY.fullmatch(identity):
+    if path.parent != parent or not TASK_NAME.fullmatch(path.name) or not IDENTITY.fullmatch(identity):
         raise ValueError('invalid scanner task identity')
     try:
         metadata = path.lstat()
@@ -122,7 +121,7 @@ def sweep(parent):
         task = Path(task_text).absolute()
         if task.parent != parent:
             continue
-        if not TASK.fullmatch(task.name) or not IDENTITY.fullmatch(identity):
+        if not TASK_NAME.fullmatch(task.name) or not IDENTITY.fullmatch(identity):
             raise ValueError('invalid scanner task identity')
         try:
             _task(parent, task, identity, missing_ok=True)
