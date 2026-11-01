@@ -8,6 +8,7 @@ from unittest.mock import patch
 from code_health.build_release_bundle import build_bundle, runtime_files
 from code_health.release_bundle import read_bundle
 from code_health.qualification_candidate import candidate_snapshot
+from code_health.qualification_results import collect_bundle_results
 
 FILES = {'code_health/cli.py', 'code_health/policy.json', 'code_health/requirements.lock'}
 
@@ -52,6 +53,24 @@ class BuildReleaseBundleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             with candidate_snapshot(data, expected_sha256=digest, policy_commit='0' * 40, allowed_files=FILES):
                 pass
+
+    def test_collection_uses_bundle_snapshot_and_refuses_digest_mismatch(self):
+        data = build_bundle(self.root, self.commit, FILES)
+        digest = hashlib.sha256(data).hexdigest()
+        seen = []
+        def runner(*, candidate, case_id, **_kwargs):
+            self.assertEqual((candidate / 'code_health/cli.py').read_bytes(), b'committed')
+            seen.append(candidate)
+            return {'schemaVersion': 1, 'caseId': case_id, 'outcome': 'returned', 'value': None}
+        result = collect_bundle_results(bundle=data, expected_sha256=digest, policy_commit=self.commit,
+                                        allowed_files=FILES, image=None, bridge=None, run_id=1, run_attempt=1, runner=runner)
+        self.assertTrue(result)
+        self.assertTrue(seen)
+        self.assertTrue(all(candidate == seen[0] for candidate in seen))
+        self.assertFalse(seen[0].exists())
+        with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+            collect_bundle_results(bundle=data, expected_sha256='0' * 64, policy_commit=self.commit,
+                                   allowed_files=FILES, image=None, bridge=None, run_id=1, run_attempt=1, runner=runner)
 
     def test_rejects_missing_files_and_invalid_refs(self):
         for commit, paths in [(self.commit, FILES | {'code_health/missing.py'}), ('main', FILES),

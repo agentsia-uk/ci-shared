@@ -8,10 +8,20 @@ import re
 
 from .qualification_controller import evaluate_observation, qualification_cases
 from .qualification_container import run_candidate
+from .qualification_candidate import candidate_snapshot
 from .qualification_protocol import MAX_RESPONSE_BYTES, _unique_object, decode_observation
 
 MAX_RESULTS_BYTES = 2 * 1024 * 1024
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
+
+
+def collect_bundle_results(*, bundle, expected_sha256, policy_commit, allowed_files,
+                           image, bridge, run_id, run_attempt, runner=run_candidate):
+    """Collect only from a snapshot of the independently identified bundle."""
+    with candidate_snapshot(bundle, expected_sha256=expected_sha256,
+                            policy_commit=policy_commit, allowed_files=allowed_files) as candidate:
+        return collect_results(image=image, candidate=candidate, bridge=bridge, run_id=run_id,
+                               run_attempt=run_attempt, candidate_sha256=expected_sha256, runner=runner)
 
 
 def collect_results(*, image, candidate, bridge, run_id, run_attempt, candidate_sha256, runner=run_candidate):
