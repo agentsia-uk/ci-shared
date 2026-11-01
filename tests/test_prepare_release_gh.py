@@ -69,6 +69,16 @@ class ReleaseGhTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 release_attestation._verified_gh_fd(str(link))
 
+    @unittest.skipUnless(sys.platform == 'linux' and os.environ.get('CODE_HEALTH_GH_INTEGRATION'),
+                         'requires the real pinned Linux executable')
+    def test_real_verified_linux_cli_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'gh'
+            prepare_release_gh.prepare(target)
+            with patch.dict(os.environ, {'CODE_HEALTH_GH_EXECUTABLE': str(target)}):
+                result = release_attestation.read_command([release_attestation.GH_EXECUTABLE, '--version'])
+            self.assertTrue(result.startswith(b'gh version 2.102.0 '))
+
     @unittest.skipUnless(sys.platform == 'linux', 'requires Linux descriptor execution')
     def test_executes_the_checked_descriptor_on_linux(self):
         binary = b'#!/bin/sh\nprintf "verified\\n"\n'
