@@ -32,14 +32,15 @@ class ContainerBoundaryTests(unittest.TestCase):
                               case_id='config-valid', request=request)
 
     def test_complete_candidate_observations_are_checked_outside_the_container(self):
-        root = Path(__file__).resolve().parents[1]
+        controller = Path(__file__).resolve().parents[1]
+        root = Path(os.environ.get('QUALIFICATION_CANDIDATE_REPO', str(controller))).resolve()
         import subprocess
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
         allowed = runtime_files(root, commit)
         bundle = build_bundle(root, commit, allowed, download_readers=True)
         digest = hashlib.sha256(bundle).hexdigest()
         observations = collect_bundle_results(bundle=bundle, expected_sha256=digest, policy_commit=commit,
-            allowed_files=allowed, image=IMAGE, bridge=root / 'code_health/qualification_bridge.py',
+            allowed_files=allowed, image=IMAGE, bridge=controller / 'code_health/qualification_bridge.py',
             run_id=123, run_attempt=1)
         self.assertEqual(len(qualification_cases()),
                          validate_results(observations, run_id=123, run_attempt=1, candidate_sha256=digest))
