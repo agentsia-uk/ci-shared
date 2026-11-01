@@ -21,7 +21,7 @@ def simulated_runner(*, image, candidate, bridge, readers, case_id, request):
 class QualificationControllerTests(unittest.TestCase):
     def test_simulated_observations_match_the_qualification_cases(self):
         self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, readers=None, runner=simulated_runner), len(qualification_cases()))
-        self.assertEqual(len(qualification_cases()), 42)
+        self.assertEqual(len(qualification_cases()), 43)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):

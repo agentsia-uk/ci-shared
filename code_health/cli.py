@@ -331,8 +331,10 @@ def detector_coverage(state, language):
         confidence = detector.get('confidence')
         require(detector.get('status') in ('full', 'reduced') and type(confidence) in {int, float}
                 and math.isfinite(confidence) and 0 <= confidence <= 1, 'invalid detector coverage')
-        result[name] = (detector['status'], confidence)
-    return result
+        details = tuple(detector.get(field, '') for field in ('tool', 'reason', 'summary', 'impact'))
+        require(all(isinstance(value, str) for value in details), 'invalid detector coverage')
+        result[name] = (detector['status'], confidence, details if detector['status'] == 'reduced' else ())
+    return record['status'], result
 
 
 def compare(base_status, base_state, head_status, head_state, touched, renames, language, *, source_roots=None):

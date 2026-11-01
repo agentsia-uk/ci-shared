@@ -208,6 +208,21 @@ class RatchetTests(unittest.TestCase):
             with self.subTest(status=value), self.assertRaises(ValueError):
                 r.detector_coverage(broken, 'python')
 
+    def test_different_reduced_coverage_reasons_are_not_comparable(self):
+        before = state()
+        before['scan_coverage']['python']['detectors']['smells'] = {
+            'status': 'reduced', 'confidence': .75, 'tool': 'bandit', 'reason': 'timeout'}
+        after = copy.deepcopy(before)
+        for key, value in [('reason', 'parse_error'), ('tool', 'other-tool'), ('impact', 'other checks missing')]:
+            changed = copy.deepcopy(after)
+            changed['scan_coverage']['python']['detectors']['smells'][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'not comparable'):
+                r.compare({'objective_score': 90}, before, {'objective_score': 90}, changed, set(), {}, 'python')
+        self.assertEqual([], r.compare({'objective_score': 90}, before, {'objective_score': 90}, after, set(), {}, 'python')['errors'])
+        after['scan_coverage']['python']['status'] = 'reduced'
+        with self.assertRaisesRegex(ValueError, 'not comparable'):
+            r.compare({'objective_score': 90}, before, {'objective_score': 90}, after, set(), {}, 'python')
+
     def test_snapshot_uses_exact_blobs_despite_export_attributes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

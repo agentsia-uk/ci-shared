@@ -20,6 +20,7 @@ REJECTION_REASONS = {
     'invalid-score': 'missing or invalid objective score',
     'invalid-coverage': 'detector coverage changed between scans; scores are not comparable',
     'invalid-coverage-boolean': 'invalid detector coverage',
+    'invalid-coverage-reason': 'detector coverage changed between scans; scores are not comparable',
     'git-snapshot-escape': 'symlink escapes',
     'workflow-mutable': 'does not match workflowRef',
     'workflow-conditional': 'may not be conditional or advisory',
@@ -75,6 +76,10 @@ def qualification_cases():
     bad_coverage['headState']['scan_coverage']['python']['detectors']['smells']['confidence'] = .5
     boolean_coverage = _compare()
     boolean_coverage['headState']['scan_coverage']['python']['detectors']['smells']['confidence'] = True
+    reason_coverage = _compare()
+    for side, reason in [('baseState', 'timeout'), ('headState', 'parse_error')]:
+        reason_coverage[side]['scan_coverage']['python']['detectors']['smells'] = {
+            'status': 'reduced', 'confidence': .75, 'tool': 'bandit', 'reason': reason}
     return [
         ('config-valid', 'validate-config', {'config': valid}, 'returned'),
         ('config-traversal', 'validate-config', {'config': traversal}, 'rejected'),
@@ -101,6 +106,7 @@ def qualification_cases():
         ('invalid-score', 'compare', _compare(score_after=True), 'rejected'),
         ('invalid-coverage', 'compare', bad_coverage, 'rejected'),
         ('invalid-coverage-boolean', 'compare', boolean_coverage, 'rejected'),
+        ('invalid-coverage-reason', 'compare', reason_coverage, 'rejected'),
         ('git-snapshot-exact', 'git-snapshot', {'escape': False},
          {'source': 'def handle(value):\n    return eval(value)\n', 'substitution': 'COMMIT = "$Format:%H$"\n',
           'executable': 0o755, 'internalIsLink': True, 'internalContent': 'def handle(value):\n    return eval(value)\n'}),
