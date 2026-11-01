@@ -7,11 +7,13 @@ import stat
 import sys
 import tempfile
 
+TASK_NAME = re.compile(r'code-health-task\.[A-Za-z0-9_]{8}\Z')
+
 
 def cleanup(parent, task, identity):
     parent = Path(parent).resolve(strict=True)
     task = Path(task).absolute()
-    if task.parent != parent or not re.fullmatch(r'code-health-task\.[A-Za-z0-9]{8}', task.name):
+    if task.parent != parent or not TASK_NAME.fullmatch(task.name):
         raise ValueError('invalid scanner task directory')
     try:
         metadata = task.lstat()
