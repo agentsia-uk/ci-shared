@@ -8,6 +8,7 @@ import unittest
 
 from code_health import readers_lock
 from code_health.build_release_bundle import download_reader_archives
+from code_health.scanner_container import run_scanner
 
 IMAGE = os.environ.get('CODE_HEALTH_SCANNER_IMAGE')
 
@@ -21,40 +22,27 @@ class ScannerContainerTests(unittest.TestCase):
         archives = download_reader_archives(lock)
         with tempfile.TemporaryDirectory(prefix='scanner-container-') as temporary:
             root = Path(temporary)
-            root.chmod(0o755)
             source, output, readers = (root / name for name in ('source', 'output', 'readers'))
-            source.mkdir(mode=0o755)
-            output.mkdir(mode=0o777)
-            output.chmod(0o777)
+            source.mkdir(mode=0o700)
+            output.mkdir(mode=0o700)
             readers.mkdir(mode=0o700)
             fd = os.open(readers, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
-                files = readers_lock.unpack_archive(archives['linux-x86_64'], lock=lock,
-                                                    platform='linux-x86_64', destination_fd=fd)
+                readers_lock.unpack_archive(archives['linux-x86_64'], lock=lock,
+                                            platform='linux-x86_64', destination_fd=fd)
             finally:
                 os.close(fd)
-            for name in files:
-                (readers / name).chmod(0o444)
-            readers.chmod(0o755)
             (source / 'sample.py').write_text('def answer():\n    return 42\n')
             config = source / '.desloppify'
-            config.mkdir(mode=0o755)
+            config.mkdir(mode=0o700)
             (config / 'config.json').write_text(json.dumps({'generate_scorecard': False, 'trust_plugins': False,
                 'hermes_enabled': False, 'hermes_models': {}, 'languages': {}, 'ignore': [], 'zone_overrides': {},
                 'exclude': [], 'commit_tracking_enabled': False, 'target_strict_score': 90}))
-            mounts = [(source, '/source', 'readonly'), (readers, '/opt/code-health/readers', 'readonly'),
-                      (output, '/output', '')]
-            args = ['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--read-only',
-                    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '256',
-                    '--memory', '2g', '--memory-swap', '2g', '--cpus', '2', '--user', '10001:10001',
-                    '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g', '-e', 'HOME=/tmp', '-e', 'DESLOPPIFY_ROOT=/source',
-                    '-e', 'CI=true', '-e', 'NO_COLOR=1']
-            for host, target, mode in mounts:
-                args.extend(['--mount', f'type=bind,src={host},dst={target}' + (',' + mode if mode else '')])
-            args.extend([IMAGE, '--lang', 'python', 'scan', '--path', '.', '--profile', 'ci', '--no-badge',
-                         '--state', '/output/state.json'])
-            result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-            self.assertEqual(0, result.returncode, result.stderr.decode(errors='replace')[-4000:])
+            image_id = subprocess.check_output(['docker', 'image', 'inspect', '--format', '{{.Id}}', IMAGE],
+                                               text=True, timeout=30).strip()
+            run_scanner(image=image_id, source=source, readers=readers, output=output,
+                        arguments=['--lang', 'python', 'scan', '--path', '.', '--profile', 'ci', '--no-badge',
+                                   '--state', '/output/state.json'])
             self.assertTrue((output / 'state.json').is_file())
 
 
