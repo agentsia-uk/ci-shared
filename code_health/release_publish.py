@@ -3,11 +3,15 @@ import argparse
 import hashlib
 import json
 import os
+import stat
+import tempfile
 from pathlib import Path
 import urllib.error
 import urllib.request
 
-from .release_attestation import GH_EXECUTABLE, REPOSITORY, SHA, ensure_gh_version, read_command
+from .release_attestation import GH_EXECUTABLE, REPOSITORY, SHA, ensure_gh_version, read_command, verify_local_attestation
+from .qualification_pipeline import candidate_bundle
+from .qualification_results import MAX_RESULTS_BYTES, validate_results
 from .release_bundle import MAX_BUNDLE_BYTES
 
 BOT_ID = 41898282
@@ -53,7 +57,7 @@ def find_release(api, tag: str):
     raise ValueError('release listing exceeds its page limit')
 
 
-def publish(asset: Path, policy_commit: str) -> None:
+def _publish_verified(asset: Path, policy_commit: str) -> None:
     if not SHA.fullmatch(policy_commit) or asset.name != 'policy-bundle.tar':
         raise ValueError('invalid release commit or asset name')
     with asset.open('rb') as source:
@@ -198,12 +202,46 @@ def publish(asset: Path, policy_commit: str) -> None:
     gh('release', 'verify-asset', tag, str(asset), '-R', REPOSITORY)
 
 
+
+def _read_regular(path: Path, limit: int) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+            raise ValueError('invalid or oversized input file')
+        data = source.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError('input file exceeds its size limit')
+    return data
+
+
+def publish(asset: Path, policy_commit: str, *, repo: Path, qualification: Path,
+            run_id: int, run_attempt: int, signer_commit: str) -> None:
+    if not SHA.fullmatch(policy_commit) or not SHA.fullmatch(signer_commit) or asset.name != 'policy-bundle.tar':
+        raise ValueError('invalid release identity or asset name')
+    bundle, _, digest = candidate_bundle(repo, policy_commit)
+    if _read_regular(asset, MAX_BUNDLE_BYTES) != bundle:
+        raise ValueError('release asset differs from the rebuilt candidate')
+    observations = _read_regular(qualification, MAX_RESULTS_BYTES)
+    validate_results(observations, run_id=run_id, run_attempt=run_attempt, candidate_sha256=digest)
+    with tempfile.TemporaryDirectory(prefix='code-health-publish-') as directory:
+        frozen = Path(directory) / 'policy-bundle.tar'
+        frozen.write_bytes(bundle)
+        verify_local_attestation(frozen, policy_commit=policy_commit, signer_commit=signer_commit)
+        _publish_verified(frozen, policy_commit)
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--asset', required=True, type=Path)
     parser.add_argument('--policy-commit', required=True)
+    parser.add_argument('--repo', required=True, type=Path)
+    parser.add_argument('--qualification', required=True, type=Path)
+    parser.add_argument('--run-id', required=True, type=int)
+    parser.add_argument('--run-attempt', required=True, type=int)
+    parser.add_argument('--signer-commit', required=True)
     args = parser.parse_args()
-    publish(args.asset, args.policy_commit)
+    publish(args.asset, args.policy_commit, repo=args.repo, qualification=args.qualification,
+            run_id=args.run_id, run_attempt=args.run_attempt, signer_commit=args.signer_commit)
 
 
 if __name__ == '__main__':

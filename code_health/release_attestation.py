@@ -75,6 +75,19 @@ def verify_release(asset: str | os.PathLike[str], *, policy_commit: str, signer_
         raise ValueError('release tag does not identify the selected policy commit')
     gh('release', 'verify', tag, '-R', REPOSITORY)
     gh('release', 'verify-asset', tag, str(asset), '-R', REPOSITORY)
+    verify_local_attestation(asset, policy_commit=policy_commit, signer_commit=signer_commit, check_version=False)
+    return tag
+
+
+def verify_local_attestation(asset: str | os.PathLike[str], *, policy_commit: str, signer_commit: str, check_version: bool = True) -> None:
+    if not SHA.fullmatch(policy_commit) or not SHA.fullmatch(signer_commit):
+        raise ValueError('policy and signer commits must be full SHAs')
+    if check_version:
+        ensure_gh_version()
+
+    def gh(*args):
+        return read_command([GH_EXECUTABLE, *args])
+
     verified = json.loads(gh('attestation', 'verify', str(asset), '--repo', REPOSITORY,
                              '--signer-workflow', SIGNER, '--signer-digest', signer_commit,
                              '--source-ref', 'refs/heads/main', '--source-digest', policy_commit,
@@ -89,4 +102,3 @@ def verify_release(asset: str | os.PathLike[str], *, policy_commit: str, signer_
             raise ValueError('verified certificate lacks repository identity') from error
         if repo_id != REPOSITORY_ID:
             raise ValueError('verified certificate has the wrong repository identity')
-    return tag

@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from code_health.release_publish import BOT_ID, publish
+from code_health.release_publish import BOT_ID, _publish_verified as publish
 import code_health.release_publish as release_publish
 from code_health.cli import open_upgrade_api
 
@@ -107,6 +107,53 @@ class ReleasePublishTests(unittest.TestCase):
              patch('code_health.release_publish.open_api', side_effect=get), \
              patch('code_health.release_publish.read_command', side_effect=command):
             publish(self.asset, COMMIT)
+
+    def test_publication_requires_matching_bundle_qualification_and_attestation(self):
+        qualification = Path(self.directory.name) / 'observations.json'
+        qualification.write_bytes(b'observations')
+        original = self.asset.read_bytes()
+        digest = hashlib.sha256(original).hexdigest()
+        with patch('code_health.release_publish.candidate_bundle', return_value=(original, {}, digest)), \
+             patch('code_health.release_publish.validate_results') as validate, \
+             patch('code_health.release_publish.verify_local_attestation') as verify, \
+             patch('code_health.release_publish._publish_verified') as publish_verified:
+            def run():
+                release_publish.publish(self.asset, COMMIT, repo=Path(self.directory.name), qualification=qualification,
+                                        run_id=1, run_attempt=1, signer_commit='b' * 40)
+            self.asset.write_bytes(b'different')
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                run()
+            publish_verified.assert_not_called()
+            self.asset.write_bytes(original)
+            validate.side_effect = ValueError('invalid observations')
+            with self.assertRaisesRegex(ValueError, 'invalid observations'):
+                run()
+            publish_verified.assert_not_called()
+            validate.side_effect = None
+            verify.side_effect = ValueError('invalid attestation')
+            with self.assertRaisesRegex(ValueError, 'invalid attestation'):
+                run()
+            publish_verified.assert_not_called()
+            verify.side_effect = lambda *_args, **_kwargs: self.asset.write_bytes(b'changed after verification')
+            def check_snapshot(path, commit):
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(commit, COMMIT)
+            publish_verified.side_effect = check_snapshot
+            run()
+            publish_verified.assert_called_once()
+
+    def test_publication_refuses_symlinked_inputs(self):
+        qualification = Path(self.directory.name) / 'observations.json'
+        qualification.write_bytes(b'observations')
+        link = Path(self.directory.name) / 'linked'
+        link.symlink_to(qualification)
+        original = self.asset.read_bytes()
+        with patch('code_health.release_publish.candidate_bundle', return_value=(original, {}, hashlib.sha256(original).hexdigest())), \
+             patch('code_health.release_publish._publish_verified') as publish_verified:
+            with self.assertRaises(OSError):
+                release_publish.publish(self.asset, COMMIT, repo=Path(self.directory.name), qualification=link,
+                                        run_id=1, run_attempt=1, signer_commit='b' * 40)
+            publish_verified.assert_not_called()
 
     def test_creates_draft_uploads_and_publishes_only_after_checks(self):
         self.call()
