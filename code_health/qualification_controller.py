@@ -114,6 +114,7 @@ def qualification_cases():
           'relative': 'src/pkg/qualification_bridge.py', 'unrelatedRelative': []}),
         ('finding-move-unchanged', 'finding-move', {'mode': 'unchanged'}, {'errors': []}),
         ('finding-move-native', 'finding-move', {'mode': 'native'}, {'errors': []}),
+        ('finding-move-top-level', 'finding-move', {'mode': 'top-level'}, {'errors': []}),
         ('finding-move-changed', 'finding-move', {'mode': 'changed'},
          {'errors': ['1 new finding(s) in touched path: src/example.py (security)']}),
         ('finding-move-priority', 'finding-move', {'mode': 'high-priority'},

@@ -153,12 +153,13 @@ def _finding_move_fixture(policy, mode):
         base, head = root / 'base', root / 'head'
         (base / 'src').mkdir(parents=True)
         (head / 'src').mkdir(parents=True)
-        source = 'def validate(value):\n    return unsafe(value)\n'
+        source = ('dangerous = unsafe(value)\n' if mode == 'top-level'
+                  else 'def validate(value):\n    return unsafe(value)\n')
         (base / 'src/example.py').write_text(source)
         new = source if mode != 'changed' else 'def validate(value):\n    return unsafe(value, other=True)\n'
         (head / 'src/example.py').write_text('# inserted\n' + new)
         tier = 2 if mode == 'high-priority' else 4
-        old, current = finding(2, tier), finding(3, tier)
+        old, current = (finding(1, tier), finding(2, tier)) if mode == 'top-level' else (finding(2, tier), finding(3, tier))
         if mode == 'native':
             for item in (old, current):
                 item['detail'].pop('source')
@@ -200,7 +201,7 @@ def observe(request, policy):
             value = _scanner_fixture(policy, operation)
         elif operation == 'scanner-mapping' and not args:
             value = _scanner_mapping_fixture(policy)
-        elif operation == 'finding-move' and set(args) == {'mode'} and args['mode'] in {'unchanged', 'changed', 'high-priority', 'native'}:
+        elif operation == 'finding-move' and set(args) == {'mode'} and args['mode'] in {'unchanged', 'changed', 'high-priority', 'native', 'top-level'}:
             value = _finding_move_fixture(policy, args['mode'])
         else:
             raise RuntimeError('unknown qualification operation')

@@ -68,7 +68,10 @@ class FindingIdentity:
         scopes = [node for node in ast.walk(tree)
                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
                   and node.lineno <= line <= node.end_lineno]
-        if not scopes or any(node.decorator_list for node in scopes):
+        if not scopes:
+            scopes = [node for node in tree.body if isinstance(node, ast.stmt)
+                      and node.lineno <= line <= node.end_lineno]
+        if not scopes or any(getattr(node, 'decorator_list', ()) for node in scopes):
             return uncertain
         scopes.sort(key=lambda node: (node.lineno, -node.end_lineno))
         evidence = []

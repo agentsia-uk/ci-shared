@@ -44,6 +44,11 @@ class FindingIdentityTests(unittest.TestCase):
             item['detail'].pop('test_name')
         self.assertEqual([], self.compare(source, '# inserted\n' + source, old, new))
 
+    def test_unique_top_level_statement_can_move_without_becoming_new(self):
+        source = 'dangerous = unsafe(value)\n'
+        self.assertEqual([], self.compare(source, '# inserted\n' + source, finding(1), finding(2)))
+        self.assertTrue(self.compare(source, '# inserted\ndangerous = unsafe(other)\n', finding(1), finding(2)))
+
     def test_changed_or_duplicated_function_is_new(self):
         source = 'def validate(value):\n    return unsafe(value)\n'
         for changed in ['# inserted\ndef validate(value):\n    return unsafe(value, other=True)\n',
