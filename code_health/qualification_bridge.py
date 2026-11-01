@@ -160,6 +160,9 @@ def _finding_move_fixture(policy, mode):
         (head / 'src/example.py').write_text('# inserted\n' + new)
         tier = 2 if mode == 'high-priority' else 4
         old, current = (finding(1, tier), finding(2, tier)) if mode == 'top-level' else (finding(2, tier), finding(3, tier))
+        if mode == 'severity':
+            old['detail']['severity'] = 'low'
+            current['detail']['severity'] = 'high'
         if mode == 'native':
             for item in (old, current):
                 item['detail'].pop('source')
@@ -201,7 +204,7 @@ def observe(request, policy):
             value = _scanner_fixture(policy, operation)
         elif operation == 'scanner-mapping' and not args:
             value = _scanner_mapping_fixture(policy)
-        elif operation == 'finding-move' and set(args) == {'mode'} and args['mode'] in {'unchanged', 'changed', 'high-priority', 'native', 'top-level'}:
+        elif operation == 'finding-move' and set(args) == {'mode'} and args['mode'] in {'unchanged', 'changed', 'high-priority', 'native', 'top-level', 'severity'}:
             value = _finding_move_fixture(policy, args['mode'])
         else:
             raise RuntimeError('unknown qualification operation')

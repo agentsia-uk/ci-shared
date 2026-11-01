@@ -81,5 +81,5 @@ class FindingIdentity:
                 return uncertain
             evidence.append((hashlib.sha256(text.encode()).hexdigest(), line - node.lineno))
         return (finding['detector'], renames.get(path, path),
-                ('unique-unchanged-python-scope', *identity[:-1], detail['kind'], detail.get('test_name'),
+                ('unique-unchanged-python-scope', *identity[:-1], detail['kind'], detail.get('test_name'), detail.get('severity'),
                  finding.get('summary'), finding.get('tier'), finding.get('confidence'), tuple(evidence)))

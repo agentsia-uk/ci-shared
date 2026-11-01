@@ -68,6 +68,13 @@ class FindingIdentityTests(unittest.TestCase):
         decorated = '@policy\ndef validate(value):\n    return unsafe(value)\n'
         self.assertTrue(self.compare(decorated, decorated, finding(3), finding(3)))
 
+    def test_changed_finding_severity_is_new(self):
+        source = 'def validate(value):\n    return unsafe(value)\n'
+        old, new = finding(2), finding(3)
+        old['detail']['severity'] = 'low'
+        new['detail']['severity'] = 'high'
+        self.assertTrue(self.compare(source, '# inserted\n' + source, old, new))
+
     def test_relocated_high_priority_finding_still_blocks(self):
         source = 'def validate(value):\n    return unsafe(value)\n'
         errors = self.compare(source, '# inserted\n' + source, finding(2, tier=2), finding(3, tier=2))

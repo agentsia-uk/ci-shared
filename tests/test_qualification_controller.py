@@ -15,7 +15,7 @@ def simulated_runner(*, image, candidate, bridge, case_id, request):
 class QualificationControllerTests(unittest.TestCase):
     def test_current_policy_matches_all_qualification_cases_in_local_simulation(self):
         self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, runner=simulated_runner), len(qualification_cases()))
-        self.assertEqual(len(qualification_cases()), 36)
+        self.assertEqual(len(qualification_cases()), 37)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):
@@ -57,7 +57,7 @@ class QualificationControllerTests(unittest.TestCase):
 
     def test_finding_move_cases_reject_wrong_regression_decisions(self):
         for case_id, wrong in [('finding-move-unchanged', ['new finding']), ('finding-move-native', ['new finding']), ('finding-move-top-level', ['new finding']),
-                               ('finding-move-changed', []), ('finding-move-priority', [])]:
+                               ('finding-move-severity', []), ('finding-move-changed', []), ('finding-move-priority', [])]:
             expected = next(case[3] for case in qualification_cases() if case[0] == case_id)
             observation = {'schemaVersion': 1, 'caseId': case_id, 'outcome': 'returned',
                            'value': {'errors': wrong}}
