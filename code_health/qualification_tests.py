@@ -1,7 +1,6 @@
 """Run the independently pinned qualification inventory and record completion."""
 import argparse
 import hashlib
-import importlib
 import json
 import os
 from pathlib import Path
@@ -31,13 +30,8 @@ def run_qualification(test_dir: str, receipt: Path, expected_count: int, expecte
     if expected_cli_sha256 is not None:
         if hashlib.sha256(cli_path.read_bytes()).hexdigest() != expected_cli_sha256:
             raise ValueError('qualification policy bytes differ from the bundle')
-        package = importlib.import_module('code_health')
-        package_paths = getattr(package, '__path__', ())
-        if {Path(path).resolve() for path in package_paths} != {cli_path.parent.resolve()}:
-            raise ValueError('qualification policy package paths are not isolated')
-        cli = importlib.import_module('code_health.cli')
-        if Path(cli.__file__).resolve() != cli_path.resolve():
-            raise ValueError('qualification imported a different policy module')
+        # Importing the candidate here lets it alter the test runner and receipt.
+        raise ValueError('candidate qualification requires isolated execution')
     suite = unittest.defaultTestLoader.discover(test_dir, pattern='test_code_health.py')
     ids = sorted(test_ids(suite))
     digest = hashlib.sha256(('\n'.join(ids) + '\n').encode()).hexdigest()

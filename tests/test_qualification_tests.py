@@ -83,5 +83,28 @@ class QualificationReceiptTests(unittest.TestCase):
                                      hashlib.sha256(cli.read_bytes()).hexdigest()], cwd=candidate,
                                     env={**os.environ, 'PYTHONPATH': str(installed.parent)}, capture_output=True, timeout=20)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn(b'qualification policy package paths are not isolated', result.stderr)
+            self.assertIn(b'candidate qualification requires isolated execution', result.stderr)
+            self.assertFalse(receipt.exists())
+
+    def test_candidate_cannot_forge_test_completion_in_trusted_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'code_health').mkdir()
+            (root / 'code_health/__init__.py').write_text('')
+            cli = root / 'code_health/cli.py'
+            cli.write_text('import unittest\nclass Forged:\n testsRun=1\n skipped=[]\n expectedFailures=[]\n def wasSuccessful(self): return True\nunittest.TextTestRunner.run=lambda self,suite: Forged()\n')
+            tests = root / 'tests'
+            tests.mkdir()
+            test_file = tests / 'test_code_health.py'
+            test_file.write_text('import unittest\nclass Probe(unittest.TestCase):\n def test_case(self): self.fail("must execute")\n')
+            receipt = root / 'receipt.json'
+            script = ('import importlib.util,sys; from pathlib import Path; '
+                      's=importlib.util.spec_from_file_location("trusted_qualifier",sys.argv[1]); '
+                      'm=importlib.util.module_from_spec(s);s.loader.exec_module(m); '
+                      'm.run_qualification("tests",Path(sys.argv[2]),1,sys.argv[3],sys.argv[4],sys.argv[5])')
+            result = subprocess.run([sys.executable, '-c', script, str(TRUSTED_ROOT / 'code_health/qualification_tests.py'),
+                                     str(receipt), TEST_HASH, hashlib.sha256(test_file.read_bytes()).hexdigest(),
+                                     hashlib.sha256(cli.read_bytes()).hexdigest()], cwd=root,
+                                    env={**os.environ, 'PYTHONPATH': ''}, capture_output=True, timeout=20)
+            self.assertNotEqual(result.returncode, 0)
             self.assertFalse(receipt.exists())
