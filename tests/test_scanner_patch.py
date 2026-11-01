@@ -99,6 +99,12 @@ class ScannerPatchTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'scanner changed'):
                 cli.scan(Path('/unused'), {}, Path('/unused'), [])
 
+    def test_direct_scan_refuses_macos_before_touching_source(self):
+        from code_health import cli
+        with patch.object(cli, 'verify_scanner'), patch.object(cli.sys, 'platform', 'darwin'):
+            with self.assertRaisesRegex(ValueError, 'scanning requires Linux'):
+                cli.scan(Path('/unused'), {}, Path('/unused'), [])
+
     def test_policy_must_bind_the_exact_scanner_patch(self):
         from code_health import cli
         with patch.dict(cli.POLICY, {'scannerPatch': {'id': scanner_patch.PATCH_ID, 'sha256': '0' * 64}}), \

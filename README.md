@@ -197,10 +197,12 @@ real attestation or a Linux installation has been qualified. The dependency
 lock targets Python 3.13 on Linux x86-64 or ARM64 with glibc 2.34 or newer.
 
 The reader lock pins the upstream manifest and platform archive hashes. The
-bundle builder requires all three exact reader archives and includes them with
+bundle builder requires both exact Linux reader archives and includes them with
 the metadata; the bundle verifier checks their bytes against that lock. No
 release workflow has yet qualified or activated the bundled readers. The scanner
 still needs a read-only runtime and complete release qualification.
+Trusted scans run only on Linux; the macOS publisher validates and publishes
+their evidence without scanning.
 
 Run the verifier's tests with the pinned scanner installed:
 

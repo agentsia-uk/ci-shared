@@ -11,11 +11,6 @@
       "sha256": "5b5a4d2d5319b7d2fae6c7a87e8bf8618c6c827842dba7641a93693980e6b5ea",
       "size": 19134009,
       "url": "https://github.com/kreuzberg-dev/tree-sitter-language-pack/releases/download/v1.6.2/parsers-linux-x86_64.tar.zst"
-    },
-    "macos-arm64": {
-      "sha256": "d4c500b1df836ad04997cacca0c4b4d0b18dcc3ef572b99ef44b128119571865",
-      "size": 21108523,
-      "url": "https://github.com/kreuzberg-dev/tree-sitter-language-pack/releases/download/v1.6.2/parsers-macos-arm64.tar.zst"
     }
   },
   "schemaVersion": 1,

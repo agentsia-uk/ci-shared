@@ -11,7 +11,7 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_READER_FILES = 512
 MAX_READER_BYTES = 128 * 1024 * 1024
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
-PLATFORMS = frozenset({'linux-x86_64', 'linux-aarch64', 'macos-arm64'})
+PLATFORMS = frozenset({'linux-x86_64', 'linux-aarch64'})
 ASSET_NAMES = {platform: 'code_health/readers-' + platform + '.tar.zst' for platform in PLATFORMS}
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
 VERSION = re.compile(r'[0-9]+(?:\.[0-9]+)+\Z')
@@ -117,7 +117,7 @@ def verify_manifest(lock_raw: bytes, manifest_raw: bytes, *, package_version: st
 
 def verify_archive(data: bytes, *, lock: ReaderLock, platform: str) -> bytes:
     """Return the same immutable bytes only when they match the authenticated lock."""
-    if not isinstance(data, bytes) or not isinstance(lock, ReaderLock):
+    if not isinstance(data, bytes) or not isinstance(lock, ReaderLock) or platform not in PLATFORMS:
         raise ValueError('invalid reader archive input')
     selected = [entry for entry in lock.archives if entry.platform == platform]
     if (len(selected) != 1 or len(data) != selected[0].size or len(data) > MAX_ARCHIVE_BYTES
@@ -146,8 +146,7 @@ def unpack_archive(data: bytes, *, lock: ReaderLock, platform: str, destination_
     if (not stat.S_ISDIR(directory.st_mode) or directory.st_mode & 0o077
             or (hasattr(os, 'geteuid') and directory.st_uid != os.geteuid()) or os.listdir(destination_fd)):
         raise ValueError('reader destination must be an empty private directory')
-    extension = 'dylib' if platform == 'macos-arm64' else 'so'
-    filename = re.compile(r'libtree_sitter_[a-z0-9_]+\.' + extension + r'\Z')
+    filename = re.compile(r'libtree_sitter_[a-z0-9_]+\.so\Z')
     seen = {}
     total = 0
     class BoundedReader:
