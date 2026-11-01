@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -198,6 +199,21 @@ class ProducerTests(unittest.TestCase):
             a.read_projection_directory(directory, self.repo)
         with self.assertRaisesRegex(ValueError, 'outside the checkout'):
             a.read_projection_directory(self.repo / '.github', self.repo)
+
+    def test_projection_directory_rejects_changes_during_read(self):
+        directory = self.root / 'projections'
+        directory.mkdir(mode=0o700)
+        (directory / 'project-python.json').write_bytes(json.dumps(self.projection()).encode())
+        original = os.read
+        changed = False
+        def mutate(fd, size):
+            nonlocal changed
+            if not changed:
+                changed = True
+                (directory / 'intruder.json').write_text('{}')
+            return original(fd, size)
+        with patch.object(a.os, 'read', side_effect=mutate), self.assertRaisesRegex(ValueError, 'directory changed'):
+            a.read_projection_directory(directory, self.repo)
 
     def test_standalone_v2_binds_private_projection(self):
         directory = self.root / 'projections'

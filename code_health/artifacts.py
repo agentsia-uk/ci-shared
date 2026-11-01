@@ -311,7 +311,11 @@ def read_projection_directory(directory, repo) -> dict[str, bytes]:
             finally:
                 os.close(file_fd)
         current = requested.lstat()
-        cli.require((current.st_dev, current.st_ino) == (metadata.st_dev, metadata.st_ino), 'projection directory changed during read')
+        after = os.fstat(fd)
+        cli.require((current.st_dev, current.st_ino) == (metadata.st_dev, metadata.st_ino) and
+                    (after.st_dev, after.st_ino, after.st_uid, after.st_mode, after.st_mtime_ns, after.st_ctime_ns) ==
+                    (metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_mode, metadata.st_mtime_ns, metadata.st_ctime_ns) and
+                    sorted(os.listdir(fd)) == sorted(names), 'projection directory changed during read')
         return output
     finally:
         os.close(fd)
