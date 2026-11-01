@@ -1,5 +1,6 @@
 """Check the real upstream reader archive on a hosted Linux runner."""
 import os
+import ctypes
 from pathlib import Path
 import subprocess
 import tempfile
@@ -37,7 +38,14 @@ class ReaderIntegrationTests(unittest.TestCase):
                         os.chmod(directory, 0o500)
                         try:
                             for language in sorted(readers_lock.required_grammars()):
-                                self.assertIsNotNone(pack.get_parser(language).parse(b''))
+                                try:
+                                    self.assertIsNotNone(pack.get_parser(language).parse(b''))
+                                except Exception as error:
+                                    try:
+                                        ctypes.CDLL(str(Path(directory) / f'libtree_sitter_{language}.so'))
+                                    except OSError as load_error:
+                                        raise AssertionError(f'{language} library failed to load: {load_error}') from error
+                                    raise
                         finally:
                             os.chmod(directory, 0o700)
                     platform_readers[archive.platform] = {name.rsplit('.', 1)[0] for name in unpacked}
