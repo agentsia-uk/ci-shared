@@ -47,6 +47,9 @@ class ReleasePublishTests(unittest.TestCase):
     def call(self):
         def get(request, timeout):
             url = request.full_url
+            if request.get_method() == 'GET':
+                self.assertEqual(request.get_header('Cache-control'), 'no-cache')
+                url = url.split('&code_health_read=', 1)[0].split('?code_health_read=', 1)[0]
             if url.endswith('/immutable-releases'):
                 self.assertEqual(request.get_header('Authorization'), 'Bearer read-token')
                 value = {'enabled': self.enabled}

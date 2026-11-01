@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 import urllib.error
 import urllib.request
+import uuid
 
 from .release_attestation import GH_EXECUTABLE, REPOSITORY, SHA, ensure_gh_version, read_command, verify_local_attestation
 from .qualification_pipeline import candidate_bundle
@@ -79,6 +80,9 @@ def _publish_verified(asset: Path, policy_commit: str) -> None:
         host = 'uploads.github.com' if upload is not None else 'api.github.com'
         request_method = method or ('POST' if body is not None or upload is not None else 'GET')
         headers = {'Authorization': 'Bearer ' + (admin_read_token if admin else token), 'Accept': 'application/vnd.github+json'}
+        if request_method == 'GET':
+            headers['Cache-Control'] = 'no-cache'
+            path += ('&' if '?' in path else '?') + 'code_health_read=' + uuid.uuid4().hex
         if upload is not None:
             headers['Content-Type'] = 'application/octet-stream'
         elif body is not None:
