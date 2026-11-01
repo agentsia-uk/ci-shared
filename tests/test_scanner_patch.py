@@ -46,6 +46,14 @@ class ScannerPatchTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'scanner changed'):
                 cli.scan(Path('/unused'), {}, Path('/unused'), [])
 
+    def test_policy_must_bind_the_exact_scanner_patch(self):
+        from code_health import cli
+        with patch.dict(cli.POLICY, {'scannerPatch': {'id': scanner_patch.PATCH_ID, 'sha256': '0' * 64}}), \
+                patch.object(scanner_patch, 'verify') as verify:
+            with self.assertRaisesRegex(ValueError, 'scanner patch differs from policy'):
+                cli.scan(Path('/unused'), {}, Path('/unused'), [])
+            verify.assert_not_called()
+
     def test_failed_publication_preserves_the_original_scanner(self):
         original = scanner_patch.scanner_source().read_bytes()
         if hashlib.sha256(original).hexdigest() == scanner_patch.PATCHED_SHA256:

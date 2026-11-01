@@ -375,8 +375,13 @@ def snapshot(repo, sha, destination):
         target.symlink_to(link)
 
 
-def scan(snapshot_root, area, output, areas):
+def verify_scanner():
+    require(POLICY.get('scannerPatch') == {'id': scanner_patch.PATCH_ID, 'sha256': scanner_patch.PATCHED_SHA256}, 'scanner patch differs from policy')
     scanner_patch.verify()
+
+
+def scan(snapshot_root, area, output, areas):
+    verify_scanner()
     snapshot_root = snapshot_root.resolve()
     root = (snapshot_root / area['path']).resolve()
     require(root.is_relative_to(snapshot_root) and root.is_dir(), 'scan area is missing or escapes its snapshot')
@@ -418,7 +423,7 @@ def main():
     args = parser.parse_args()
     require(re.fullmatch('[0-9a-f]{40}', args.base) and re.fullmatch('[0-9a-f]{40}', args.head), 'base and head must be full commit SHAs')
     require(version('desloppify') == POLICY['desloppifyVersion'], 'installed scanner version differs from the shared pin')
-    scanner_patch.verify()
+    verify_scanner()
     args.output = args.output.resolve()
     require(re.fullmatch(r'agentsia-uk/[A-Za-z0-9_.-]+', args.repository), 'repository must be an agentsia-uk slug')
     repo = args.repo.resolve()
