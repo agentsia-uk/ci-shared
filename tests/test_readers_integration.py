@@ -32,6 +32,14 @@ class ReaderIntegrationTests(unittest.TestCase):
                                                                lock=lock, platform=archive.platform, destination_fd=fd)
                     finally:
                         os.close(fd)
+                    if archive.platform == 'linux-x86_64':
+                        pack.configure(cache_dir=directory)
+                        os.chmod(directory, 0o500)
+                        try:
+                            for language in sorted(readers_lock.required_grammars()):
+                                self.assertIsNotNone(pack.get_parser(language).parse(b''))
+                        finally:
+                            os.chmod(directory, 0o700)
                     platform_readers[archive.platform] = {name.rsplit('.', 1)[0] for name in unpacked}
         for platform, names in platform_readers.items():
             with self.subTest(platform=platform), tempfile.TemporaryDirectory(prefix='reader-inventory-') as inventory:
