@@ -12,6 +12,10 @@ from code_health import prepare_release_gh, release_attestation
 
 
 class ReleaseGhTests(unittest.TestCase):
+    def test_release_pins_are_full_sha256_values(self):
+        self.assertRegex(prepare_release_gh.ARCHIVE_SHA256, r'^[0-9a-f]{64}$')
+        self.assertRegex(prepare_release_gh.BINARY_SHA256, r'^[0-9a-f]{64}$')
+
     def test_verified_archive_produces_only_the_expected_binary(self):
         binary = b'approved synthetic executable'
         data = io.BytesIO()
