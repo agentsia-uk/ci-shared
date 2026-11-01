@@ -9,7 +9,7 @@ import re
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_READER_FILES = 512
-MAX_READER_BYTES = 32 * 1024 * 1024
+MAX_READER_BYTES = 128 * 1024 * 1024
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
 PLATFORMS = frozenset({'linux-x86_64', 'linux-aarch64', 'macos-arm64'})
 ASSET_NAMES = {platform: 'code_health/readers-' + platform + '.tar.zst' for platform in PLATFORMS}
