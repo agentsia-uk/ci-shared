@@ -138,7 +138,8 @@ def _scanner_mapping_fixture(policy):
     ts = {'__name__': 'desloppify.languages.typescript.test_coverage'}
     py = {'__name__': 'desloppify.languages.python.test_coverage'}
     mapper = {'__name__': 'desloppify.engine.detectors.coverage.mapping_imports'}
-    for name, namespace in [('typescript', ts), ('python', py), ('mapping', mapper)]:
+    graph = {'__name__': 'desloppify.languages.python.detectors.deps_resolution'}
+    for name, namespace in [('typescript', ts), ('python', py), ('mapping', mapper), ('python_graph', graph)]:
         exec(compile(sources[name], '<candidate-scanner>', 'exec'), namespace)
     mapping = ts['map_test_to_source']
     parse, resolve = py['parse_test_import_specs'], py['resolve_import_spec']
@@ -146,7 +147,16 @@ def _scanner_mapping_fixture(policy):
     mapper['_load_lang_test_coverage_module'] = lambda _lang: types.SimpleNamespace(parse_test_import_specs=parse, resolve_import_spec=resolve)
     unrelated = mapper['_parse_test_imports']('src/pkg/tests/test_bridge.py', {'src/other/missing.py'},
                                               {'missing': 'src/other/missing.py'}, 'python')
-    return {'patchSha256': hashlib.sha256(identity).hexdigest(),
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        package = root / 'sample'
+        package.mkdir()
+        importer, imported = package / 'caller.py', package / 'dependency.py'
+        importer.touch()
+        imported.touch()
+        namespace_import = graph['resolve_python_from_import']('sample', 'dependency', str(importer), root)
+        namespace_resolved = namespace_import == [str(imported.resolve())]
+    return {'namespaceImport': namespace_resolved, 'patchSha256': hashlib.sha256(identity).hexdigest(),
             'exact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
             'ambiguousName': mapping('other/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
             'ambiguousExact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/db/health.tsx'}),

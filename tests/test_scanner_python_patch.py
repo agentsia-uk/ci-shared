@@ -59,5 +59,33 @@ text = "from fake import ignored"
             self.parse('from x import a,\n')
 
 
+class PythonNamespaceGraphTests(unittest.TestCase):
+    def test_namespace_package_submodule_is_not_orphaned(self):
+        import importlib.util
+        import tempfile
+        from pathlib import Path
+        source = Path(scanner_patch.scanner_source('python_graph')).read_bytes()
+        if scanner_patch.component_digest(source) == scanner_patch.COMPONENTS['python_graph']['patched']:
+            patched = source
+        else:
+            patched = scanner_patch.patched_component('python_graph', source)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module = root / 'deps_resolution.py'
+            module.write_bytes(patched)
+            spec = importlib.util.spec_from_file_location('test_namespace_resolution', module)
+            loaded = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(loaded)
+            package = root / 'code_health'
+            package.mkdir()
+            importer = package / 'cli.py'
+            importer.touch()
+            imported = package / 'finding_identity.py'
+            imported.touch()
+            self.assertEqual([str(imported.resolve())], loaded.resolve_python_from_import(
+                'code_health', 'finding_identity', str(importer), root))
+            self.assertEqual([], loaded.resolve_python_from_import('code_health', 'missing', str(importer), root))
+
+
 if __name__ == '__main__':
     unittest.main()

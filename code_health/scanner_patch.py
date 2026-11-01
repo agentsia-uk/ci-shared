@@ -5,14 +5,17 @@ import os
 from pathlib import Path
 import tempfile
 
-PATCH_ID = 'coverage-test-mapping-v2'
-PATCHED_SHA256 = '75b659ceec01b327f6a7e958ecb3dfba1c12d0adf3d9599ecac95886b86de360'
+PATCH_ID = 'coverage-and-python-graph-v3'
+PATCHED_SHA256 = '8e9385c2901a8c2ca6dc919a652a9a2b5c97c23d6c2c316beef98a752415c0d6'
 COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_coverage',
                 'original': 'ab59a286ef8165fb8c812d894c1e1db6a6facca547a4a32e96eb20a5cfb3cd1f',
                 'patched': 'c3cc9f3d130093b6e9a289c67893e25fbcef44a3091bdd7bf081069dbee0d28f'},
  'python': {'module': 'desloppify.languages.python.test_coverage',
             'original': 'fc531fe162ab0ff0eabbc73f779d340bc9964aa1599964323cbfb7285d811986',
             'patched': 'a9109e1b617fcb53c2fae174b4bd8866e4df1a7e247077b789c13011f8ff1acc'},
+ 'python_graph': {'module': 'desloppify.languages.python.detectors.deps_resolution',
+                  'original': '91381f7254ec7411068398f638349035337bbcd92d1f985c6d8f6c3fca00a1c4',
+                  'patched': '36d7c99e42a62c7995316639027c663f8378201732b1f74cd76ca807629ab76e'},
  'mapping': {'module': 'desloppify.engine.detectors.coverage.mapping_imports',
              'original': '625065243f813401187bb7c507753b328fe6f657c7f1faf995fcaafe224e015f',
              'patched': 'e89a7267a8e6e29072e8bc3b7655822a0efdcc8e9442921af2f87060c6b459fe'}}
@@ -112,6 +115,11 @@ def patched_component(component: str, original: bytes) -> bytes:
             start = source.index('def ' + name + '(')
             end = source.index('def ' + following + '(', start)
             source = source[:start] + replacement + source[end:]
+    elif component == 'python_graph':
+        old = '    if target and import_names:\n'
+        if source.count(old) != 1:
+            raise ValueError('scanner graph patch target is missing or ambiguous')
+        source = source.replace(old, '    if import_names:\n', 1)
     elif component == 'mapping':
         old = '        # Fallback: module-name lookup with progressively shorter prefixes.\n'
         new = '        if lang_name == "python" and spec.startswith("."):\n            continue\n' + old
