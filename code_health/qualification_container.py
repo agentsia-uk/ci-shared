@@ -11,6 +11,7 @@ import selectors
 import signal
 import stat
 import subprocess
+import tempfile
 import time
 
 from .qualification_protocol import CASE_ID, MAX_RESPONSE_BYTES, decode_observation
@@ -20,6 +21,46 @@ MAX_REQUEST_BYTES = 64 * 1024
 IMAGE = re.compile(r'(?:[a-z0-9][a-z0-9./:_-]*@)?sha256:[0-9a-f]{64}\Z')
 CONTAINER_ID = re.compile(r'[0-9a-f]{64}\Z')
 ENVIRONMENT = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'DOCKER_CONFIG': '/nonexistent'}
+
+
+def docker_capture(args, *, env, limit, timeout=30, check=True):
+    """Bound Docker output while reading it and stop the process group on failure."""
+    child = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+    deadline = time.monotonic() + timeout
+    data = bytearray()
+    completed = False
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise subprocess.TimeoutExpired(args, timeout)
+                chunk = os.read(child.stdout.fileno(), min(65536, limit + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if len(data) > limit:
+                    raise ValueError('Docker response exceeds its size limit')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(args, timeout)
+        code = child.wait(timeout=remaining)
+        if check and code:
+            raise subprocess.CalledProcessError(code, args)
+        completed = True
+        return subprocess.CompletedProcess(args, code, bytes(data))
+    finally:
+        if not completed:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            child.wait(timeout=5)
+        finally:
+            child.stdout.close()
 
 
 def docker_environment():
@@ -37,10 +78,7 @@ def docker_environment():
 
 
 def _require_seccomp(env=ENVIRONMENT):
-    result = subprocess.run([DOCKER, 'info', '--format', '{{json .SecurityOptions}}'], env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
-    if len(result) > 4096:
-        raise ValueError('invalid Docker security options')
+    result = docker_capture([DOCKER, 'info', '--format', '{{json .SecurityOptions}}'], env=env, limit=4096).stdout
     try:
         options = json.loads(result)
     except (ValueError, UnicodeError, RecursionError) as error:
@@ -55,6 +93,23 @@ def _mount(path: Path, target: str, *, directory: bool) -> str:
     if ',' in str(resolved) or (not resolved.is_dir() if directory else not resolved.is_file()):
         raise ValueError('invalid qualification mount')
     return f'type=bind,src={resolved},dst={target},readonly'
+
+
+def _container_id(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_size > 65:
+            raise ValueError('invalid container identity file')
+        recorded = os.read(fd, 66).decode('ascii').strip()
+    finally:
+        os.close(fd)
+    if not CONTAINER_ID.fullmatch(recorded):
+        raise ValueError('invalid container identity file')
+    return recorded
 
 
 def _exchange(container_id: str, request: bytes, timeout: float) -> bytes:
@@ -140,13 +195,17 @@ def run_candidate(*, image: str, candidate: Path, bridge: Path, readers: Path, c
             '--mount', _mount(bridge, '/qualification-bridge.py', directory=False),
             '--mount', _mount(readers, '/opt/code-health/readers', directory=True),
             '--entrypoint', '/opt/tool/bin/python', image, '-I', '-B', '/qualification-bridge.py']
-    created = subprocess.run(args, env=ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                             timeout=30, check=True).stdout.decode('ascii').strip()
-    if not CONTAINER_ID.fullmatch(created):
-        raise ValueError('invalid container identity')
-    try:
-        response = _exchange(created, payload, timeout)
-        return decode_observation(response, expected_case=case_id)
-    finally:
-        subprocess.run([DOCKER, 'rm', '--force', created], env=ENVIRONMENT, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=30, check=True)
+    with tempfile.TemporaryDirectory(prefix='code-health-qualification-') as directory:
+        cidfile = Path(directory) / 'id'
+        args[2:2] = ['--cidfile', str(cidfile)]
+        try:
+            created = docker_capture(args, env=ENVIRONMENT, limit=128).stdout.decode('ascii').strip()
+            if not CONTAINER_ID.fullmatch(created) or _container_id(cidfile) != created:
+                raise ValueError('invalid container identity')
+            response = _exchange(created, payload, timeout)
+            return decode_observation(response, expected_case=case_id)
+        finally:
+            recorded = _container_id(cidfile)
+            if recorded is not None:
+                subprocess.run([DOCKER, 'rm', '--force', recorded], env=ENVIRONMENT, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=30, check=True)

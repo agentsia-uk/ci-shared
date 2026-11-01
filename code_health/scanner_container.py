@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 
-from .qualification_container import DOCKER, ENVIRONMENT, _require_seccomp, docker_environment
+from .qualification_container import DOCKER, ENVIRONMENT, _container_id, _require_seccomp, docker_capture, docker_environment
 from . import scanner_recovery
 
 IMAGE = re.compile(r'sha256:[0-9a-f]{64}\Z')
@@ -41,23 +41,6 @@ def _make_readable(root):
                 os.fchmod(fd, stat.S_IMODE(opened.st_mode) | 0o444)
             finally:
                 os.close(fd)
-
-
-def _container_id(path):
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return None
-    try:
-        metadata = os.fstat(fd)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_size > 65:
-            raise ValueError('invalid scanner container identity file')
-        value = os.read(fd, 66).decode('ascii').strip()
-    finally:
-        os.close(fd)
-    if not CONTAINER.fullmatch(value):
-        raise ValueError('invalid scanner container identity file')
-    return value
 
 
 def _capture(command, env):
@@ -124,10 +107,8 @@ def _read_output(directory):
 
 
 def _inspect(container, image, mounts, env):
-    raw = subprocess.run([DOCKER, 'inspect', '--format', '{{json .}}', container], env=env,
-                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
-    if len(raw) > 1024 * 1024:
-        raise ValueError('scanner container inspection exceeds its size limit')
+    raw = docker_capture([DOCKER, 'inspect', '--format', '{{json .}}', container], env=env,
+                         limit=1024 * 1024).stdout
     try:
         record = json.loads(raw)
     except (UnicodeError, json.JSONDecodeError) as error:
@@ -153,9 +134,8 @@ def _validate_inspection(record, image, mounts):
 
 
 def _present(container, env):
-    listing = subprocess.run([DOCKER, 'ps', '--all', '--no-trunc', '--filter', 'id=' + container,
-                              '--format', '{{.ID}}'], env=env, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
+    listing = docker_capture([DOCKER, 'ps', '--all', '--no-trunc', '--filter', 'id=' + container,
+                              '--format', '{{.ID}}'], env=env, limit=128).stdout
     if listing.strip() not in (b'', container.encode()):
         raise ValueError('invalid scanner container lookup')
     return bool(listing.strip())
@@ -214,8 +194,8 @@ def run_scanner(*, image, source, readers, output, arguments):
             cidfile = Path(temporary) / 'id'
             created = None
             try:
-                result = subprocess.run([*command, '--cidfile', str(cidfile), image, *arguments], env=env,
-                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=True)
+                result = docker_capture([*command, '--cidfile', str(cidfile), image, *arguments],
+                                        env=env, limit=128, timeout=60)
                 created = result.stdout.decode('ascii').strip()
                 if not CONTAINER.fullmatch(created) or _container_id(cidfile) != created:
                     raise ValueError('invalid scanner container identity')

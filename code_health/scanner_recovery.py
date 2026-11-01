@@ -4,10 +4,9 @@ import os
 from pathlib import Path
 import re
 import stat
-import subprocess
 
 from .cleanup_task import TASK_NAME, cleanup
-from .qualification_container import DOCKER, ENVIRONMENT
+from .qualification_container import DOCKER, ENVIRONMENT, docker_capture
 
 PREFIX = 'org.agentsia.code-health.'
 SHA = re.compile(r'[0-9a-f]{64}\Z')
@@ -77,26 +76,21 @@ def sweep(parent):
     from .qualification_container import docker_environment
     parent = Path(parent).resolve(strict=True)
     env = docker_environment()
-    listing = subprocess.run([DOCKER, 'ps', '--all', '--no-trunc', '--filter', 'label=' + PREFIX + 'task',
-                              '--format', '{{.ID}}'], env=env, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, timeout=30, check=True).stdout
-    if len(listing) > 128 * 1024:
-        raise ValueError('scanner container inventory exceeds its limit')
+    listing = docker_capture([DOCKER, 'ps', '--all', '--no-trunc', '--filter', 'label=' + PREFIX + 'task',
+                              '--format', '{{.ID}}'], env=env, limit=128 * 1024).stdout
     groups = {}
     protected = set()
     for raw in listing.splitlines():
         container = raw.decode('ascii')
         if not SHA.fullmatch(container):
             raise ValueError('invalid scanner container inventory')
-        inspected = subprocess.run([DOCKER, 'inspect', '--format', '{{json .}}', container], env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+        inspected = docker_capture([DOCKER, 'inspect', '--format', '{{json .}}', container], env=env,
+                                   limit=1024 * 1024, check=False)
         if inspected.returncode:
             if not _present(container, env):
                 continue
             raise ValueError('scanner container could not be inspected')
         data = inspected.stdout
-        if len(data) > 1024 * 1024:
-            raise ValueError('scanner container inspection exceeds its limit')
         record = json.loads(data)
         if record.get('Id') != container:
             raise ValueError('scanner container identity differs from inventory')
