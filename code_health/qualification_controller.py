@@ -101,6 +101,7 @@ def qualification_cases():
          {'source': 'def handle(value):\n    return eval(value)\n', 'substitution': 'COMMIT = "$Format:%H$"\n',
           'executable': 0o755, 'internalIsLink': True, 'internalContent': 'def handle(value):\n    return eval(value)\n'}),
         ('git-snapshot-escape', 'git-snapshot', {'escape': True}, 'rejected'),
+        ('git-identity', 'git-identity', {}, {'content': 'original = True\n'}),
         ('git-renames-deletions', 'git-changed-paths', {},
          {'touched': ['new name.py', 'old name.py', 'removed.py'], 'renames': {'old name.py': 'new name.py'}}),
         ('workflow-valid', 'workflow-pin', {'mode': 'valid'}, 'returned'),

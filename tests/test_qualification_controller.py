@@ -21,7 +21,7 @@ def simulated_runner(*, image, candidate, bridge, readers, case_id, request):
 class QualificationControllerTests(unittest.TestCase):
     def test_simulated_observations_match_the_qualification_cases(self):
         self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, readers=None, runner=simulated_runner), len(qualification_cases()))
-        self.assertEqual(len(qualification_cases()), 40)
+        self.assertEqual(len(qualification_cases()), 41)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):
@@ -79,6 +79,16 @@ class QualificationControllerTests(unittest.TestCase):
                            'value': {**expected, **change}}
             with self.assertRaisesRegex(ValueError, 'disagrees'):
                 evaluate_observation(observation, 'scanner-mapping', expected)
+
+    def test_git_identity_case_rejects_path_dependent_policy(self):
+        import subprocess
+        class PathDependent:
+            @staticmethod
+            def snapshot(repo, sha, destination):
+                subprocess.run(['git', 'archive', sha], cwd=repo, check=True)
+        request = {'schemaVersion': 1, 'caseId': 'git-identity', 'operation': 'git-identity', 'arguments': {}}
+        with self.assertRaises(subprocess.CalledProcessError):
+            qualification_bridge.observe(request, PathDependent())
 
     def test_scanner_security_requires_finding_and_full_coverage(self):
         expected = next(case[3] for case in qualification_cases() if case[0] == 'scanner-security')

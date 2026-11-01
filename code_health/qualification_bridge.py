@@ -65,6 +65,35 @@ def _git_fixture(policy, operation, escape):
         return {'touched': sorted(touched), 'renames': renames}
 
 
+def _git_identity_fixture(policy):
+    with tempfile.TemporaryDirectory(prefix='qualification-git-identity-') as temporary:
+        root = Path(temporary)
+        repo = root / 'repo'
+        repo.mkdir()
+        git = _fixture_git(repo, root)
+        (repo / 'sample.py').write_text('original = True\n')
+        git('add', '.')
+        git('commit', '-qm', 'original')
+        original = git('rev-parse', 'HEAD')
+        (repo / 'sample.py').write_text('replacement = True\n')
+        git('add', '.')
+        git('commit', '-qm', 'replacement')
+        git('replace', original, git('rev-parse', 'HEAD'))
+        binary = root / 'bin'
+        binary.mkdir()
+        shadow = binary / 'git'
+        shadow.write_text('#!/bin/sh\nexit 99\n')
+        shadow.chmod(0o755)
+        previous = os.environ.copy()
+        try:
+            os.environ.update(PATH=str(binary), GIT_DIR=str(root / 'wrong'), GIT_NO_REPLACE_OBJECTS='0')
+            policy.snapshot(repo, original, root / 'snapshot')
+        finally:
+            os.environ.clear()
+            os.environ.update(previous)
+        return {'content': (root / 'snapshot/sample.py').read_text()}
+
+
 def _workflow_fixture(policy, mode):
     with tempfile.TemporaryDirectory(prefix='qualification-workflow-') as temporary:
         root = Path(temporary)
@@ -239,6 +268,8 @@ def observe(request, policy):
             value = _git_fixture(policy, operation, args['escape'])
         elif operation == 'git-changed-paths' and not args:
             value = _git_fixture(policy, operation, False)
+        elif operation == 'git-identity' and not args:
+            value = _git_identity_fixture(policy)
         elif (operation == 'workflow-pin' and set(args) == {'mode'} and isinstance(args['mode'], str) and
               args['mode'] in {'valid', 'mutable', 'conditional', 'filtered'}):
             _workflow_fixture(policy, args['mode'])
