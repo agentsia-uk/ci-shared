@@ -100,6 +100,21 @@ class QualificationControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'disagrees'):
             evaluate_observation(observation, 'scanner-security', expected)
 
+    def test_boolean_observations_cannot_be_replaced_by_numbers(self):
+        expected = next(case[3] for case in qualification_cases() if case[0] == 'scanner-security')
+        observation = {'schemaVersion': 1, 'caseId': 'scanner-security', 'outcome': 'returned',
+                       'value': {**expected, 'hasSecurityFinding': 1}}
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            evaluate_observation(observation, 'scanner-security', expected)
+        observation['value'] = {'nested': [1]}
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            evaluate_observation(observation, 'scanner-security', {'nested': [True]})
+        observation['value'] = {'nested': [True]}
+        with self.assertRaisesRegex(ValueError, 'disagrees'):
+            evaluate_observation(observation, 'scanner-security', {'nested': [1]})
+        observation['value'] = {'score': 90.0}
+        evaluate_observation(observation, 'scanner-security', {'score': 90})
+
     def test_unrelated_workflow_error_is_not_counted_as_pin_enforcement(self):
         class BrokenWorkflow:
             @staticmethod

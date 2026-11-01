@@ -133,6 +133,16 @@ def qualification_cases():
     ]
 
 
+def _same_json_value(actual, expected):
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is bool and type(expected) is bool and actual == expected
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(_same_json_value(actual[key], expected[key]) for key in expected)
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(_same_json_value(a, b) for a, b in zip(actual, expected))
+    return actual == expected
+
+
 def evaluate_observation(observation, expected_case, expected):
     if (not isinstance(observation, dict) or
             set(observation) != {'schemaVersion', 'caseId', 'outcome', 'value'} or
@@ -151,7 +161,7 @@ def evaluate_observation(observation, expected_case, expected):
     value = observation.get('value')
     if observation.get('outcome') != 'returned' or not isinstance(value, dict) or not isinstance(expected, dict):
         raise ValueError('candidate returned an invalid structured observation')
-    if value != expected:
+    if not _same_json_value(value, expected):
         raise ValueError('candidate disagrees with the trusted qualification case')
 
 
