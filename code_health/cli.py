@@ -24,6 +24,7 @@ from desloppify.languages import available_langs, get_lang
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
 LANGUAGES = set(available_langs())
+MAX_UPGRADE_PAGE_BYTES = 16 * 1024 * 1024
 
 
 class _NoUpgradeRedirect(urllib.request.HTTPRedirectHandler):
@@ -33,6 +34,17 @@ class _NoUpgradeRedirect(urllib.request.HTTPRedirectHandler):
 
 def open_upgrade_api(request, *, timeout):
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoUpgradeRedirect()).open(request, timeout=timeout)
+
+
+def read_upgrade_page(response):
+    data = response.read(MAX_UPGRADE_PAGE_BYTES + 1)
+    require(len(data) <= MAX_UPGRADE_PAGE_BYTES, 'upgrade PR metadata exceeds the page size limit')
+    try:
+        prs = json.loads(data)
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise ValueError('invalid upgrade PR metadata') from error
+    require(isinstance(prs, list) and len(prs) <= 100, 'invalid upgrade PR metadata')
+    return prs
 
 
 def require(condition, message):
@@ -173,8 +185,7 @@ def upgrade_evidence(event, args, touched):
         query = urllib.parse.urlencode({'state': 'open', 'base': branch, 'per_page': 100, 'page': page})
         request = urllib.request.Request(f'https://api.github.com/repos/{args.repository}/pulls?{query}', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'})
         with open_upgrade_api(request, timeout=30) as response:
-            prs = json.load(response)
-        require(isinstance(prs, list), 'invalid upgrade PR metadata')
+            prs = read_upgrade_page(response)
         for pr in prs:
             if not authorized_upgrade({'pull_request': pr}, args.repository, {CONFIG}):
                 continue
