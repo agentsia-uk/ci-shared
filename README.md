@@ -204,6 +204,8 @@ release workflow has yet qualified or activated the bundled readers. The scanner
 still needs a read-only runtime and complete release qualification.
 Trusted scans run only on Linux; the planned macOS publisher will validate and
 publish their evidence without scanning.
+The scanner container is exercised with a sample project in CI, but the shared
+workflow does not yet use that container or a qualified release.
 
 Run the verifier's tests with the pinned scanner installed:
 

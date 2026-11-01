@@ -93,6 +93,8 @@ def runtime_files(repo: str | os.PathLike[str], commit: str) -> set[str]:
                          cwd=repo, env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120).stdout
     names = [name.decode('utf-8') for name in raw.split(b'\0') if name]
     result = {name for name in names if RUNTIME_SOURCE.fullmatch(name)}
+    if 'code_health/scanner.Dockerfile' in names:
+        result.add('code_health/scanner.Dockerfile')
     result.update({'code_health/policy.json', 'code_health/requirements.lock'})
     reader_files = {'code_health/readers-lock.json', 'code_health/readers-upstream.json'}
     present = reader_files & set(names)
