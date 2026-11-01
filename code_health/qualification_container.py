@@ -16,7 +16,7 @@ from .qualification_protocol import CASE_ID, MAX_RESPONSE_BYTES, decode_observat
 
 DOCKER = '/usr/bin/docker'
 MAX_REQUEST_BYTES = 64 * 1024
-IMAGE = re.compile(r'[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}\Z')
+IMAGE = re.compile(r'(?:[a-z0-9][a-z0-9./:_-]*@)?sha256:[0-9a-f]{64}\Z')
 CONTAINER_ID = re.compile(r'[0-9a-f]{64}\Z')
 ENVIRONMENT = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'DOCKER_CONFIG': '/nonexistent'}
 
@@ -123,7 +123,7 @@ def run_candidate(*, image: str, candidate: Path, bridge: Path, case_id: str,
             '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16m', '--ulimit', 'nofile=64:64',
             '--mount', _mount(candidate, '/candidate', directory=True),
             '--mount', _mount(bridge, '/qualification-bridge.py', directory=False),
-            '--entrypoint', '/usr/local/bin/python', image, '-I', '-B', '/qualification-bridge.py']
+            '--entrypoint', '/opt/tool/bin/python', image, '-I', '-B', '/qualification-bridge.py']
     created = subprocess.run(args, env=ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                              timeout=30, check=True).stdout.decode('ascii').strip()
     if not CONTAINER_ID.fullmatch(created):

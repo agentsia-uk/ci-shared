@@ -68,16 +68,23 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-    env:
-      QUALIFICATION_TEST_IMAGE: docker.io/library/python@sha256:3856e3e7bf4d0ba061501a84ed2eb0d429663307c0f54f191dc4de03c7081c3e
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Fetch pinned probe image
-        run: docker pull "$QUALIFICATION_TEST_IMAGE"
-      - name: Test effective isolation in a real container
-        run: python3 -m unittest tests.test_qualification_container_integration -v
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Test the isolated candidate and its independent controller
+        run: |
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-qualifier.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-qualification-test:local .
+          test_image=$(docker image inspect --format '{{.Id}}' code-health-qualification-test:local)
+          unset PYTHONPATH PYTHONHOME
+          QUALIFICATION_TEST_IMAGE="$test_image" "$tool_dir/bin/python" -m unittest tests.test_qualification_container_integration -v
 
   reader-arm64-integration:
     name: Reader integration (Linux ARM64)

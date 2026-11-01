@@ -1,17 +1,49 @@
 """Exercise the actual container boundary when a pinned test image is supplied."""
 import os
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from code_health.qualification_container import run_candidate
+from code_health.build_release_bundle import build_bundle, runtime_files
+from code_health.qualification_controller import qualification_cases
+from code_health.qualification_results import collect_bundle_results, validate_results
 
 IMAGE = os.environ.get('QUALIFICATION_TEST_IMAGE')
 
 
 @unittest.skipUnless(IMAGE, 'requires a pinned image and a real Docker daemon')
 class ContainerBoundaryTests(unittest.TestCase):
+    def test_candidate_exit_cannot_claim_a_successful_test(self):
+        with tempfile.TemporaryDirectory(prefix='qualification-adversary-') as temporary:
+            root = Path(temporary)
+            root.chmod(0o755)
+            candidate = root / 'candidate'
+            candidate.mkdir(mode=0o755)
+            package = candidate / 'code_health'
+            package.mkdir(mode=0o755)
+            (package / 'cli.py').write_text('import sys\nsys.exit(0)\n')
+            bridge = Path(__file__).resolve().parents[1] / 'code_health/qualification_bridge.py'
+            request = {'schemaVersion': 1, 'caseId': 'config-valid', 'operation': 'config', 'arguments': {}}
+            with self.assertRaises(ValueError):
+                run_candidate(image=IMAGE, candidate=candidate, bridge=bridge,
+                              case_id='config-valid', request=request)
+
+    def test_complete_candidate_observations_are_checked_outside_the_container(self):
+        root = Path(__file__).resolve().parents[1]
+        import subprocess
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+        allowed = runtime_files(root, commit)
+        bundle = build_bundle(root, commit, allowed, download_readers=True)
+        digest = hashlib.sha256(bundle).hexdigest()
+        observations = collect_bundle_results(bundle=bundle, expected_sha256=digest, policy_commit=commit,
+            allowed_files=allowed, image=IMAGE, bridge=root / 'code_health/qualification_bridge.py',
+            run_id=123, run_attempt=1)
+        self.assertEqual(len(qualification_cases()),
+                         validate_results(observations, run_id=123, run_attempt=1, candidate_sha256=digest))
+
     def test_effective_container_restrictions(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
