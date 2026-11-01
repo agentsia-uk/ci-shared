@@ -142,6 +142,7 @@ def validate_envelope(value) -> dict[str, object]:
     cli.require(manifest['size'] <= MAX_MANIFEST_BYTES, 'manifest exceeds its byte limit')
     cli.validate_config(manifest['definition'])
     cli.require(manifest['definition']['policyRef'] == value['release']['policyCommitSha'], 'manifest pin differs from the verified release')
+    cli.require(manifest['definition']['workflowRef'] == value['launcher']['workflowSha'], 'manifest pin differs from the verified launcher')
     result = value['result']
     object_fields(result, {'path', 'sha256', 'size'}, 'result')
     cli.require(result['path'] == 'result.json', 'unexpected producer result path')
@@ -151,7 +152,7 @@ def validate_envelope(value) -> dict[str, object]:
     registry = value['registry']
     object_fields(registry, {'repository', 'sourceCommitSha', 'manifestSha256', 'areas', 'unsupportedLanguages'}, 'registry')
     expected = {'repository': value['repository'], 'sourceCommitSha': value['source']['commitSha'], 'manifestSha256': manifest['sha256'], 'areas': manifest['definition']['areas'], 'unsupportedLanguages': manifest['definition'].get('unsupportedLanguages', [])}
-    cli.require(registry == expected, 'registry is not the exact manifest projection')
+    cli.require(json.dumps(registry, sort_keys=True, separators=(',', ':')) == json.dumps(expected, sort_keys=True, separators=(',', ':')), 'registry is not the exact manifest projection')
     return value
 
 

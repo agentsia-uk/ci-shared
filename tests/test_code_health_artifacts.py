@@ -79,11 +79,18 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual([], a.project_registry(repository, self.commit, json.dumps(unsupported).encode())['areas'])
 
     def test_strict_envelope_rejects_weakening_spoofed_registry_and_mixed_pins(self):
-        for mutate in [lambda x: x.update(collectorValidationRequired=False), lambda x: x.update(unrecognised=True), lambda x: x['repository'].update(id=True), lambda x: x['run'].update(attempt=0), lambda x: x['launcher'].update(actionRef='main'), lambda x: x['release'].update(bundleSha256='unknown'), lambda x: x['release'].update(policyCommitSha='f' * 40), lambda x: x['registry']['areas'].clear(), lambda x: x['manifest'].update(path='../manifest.json'), lambda x: x['source'].update(commitSha='main')]:
+        for mutate in [lambda x: x.update(collectorValidationRequired=False), lambda x: x.update(unrecognised=True), lambda x: x['repository'].update(id=True), lambda x: x['run'].update(attempt=0), lambda x: x['launcher'].update(actionRef='main'), lambda x: x['launcher'].update(workflowSha='e' * 40), lambda x: x['release'].update(bundleSha256='unknown'), lambda x: x['release'].update(policyCommitSha='f' * 40), lambda x: x['registry']['areas'].clear(), lambda x: x['manifest'].update(path='../manifest.json'), lambda x: x['source'].update(commitSha='main')]:
             envelope = self.build()
             mutate(envelope)
             with self.subTest(mutation=mutate), self.assertRaises(ValueError):
                 a.validate_envelope(envelope)
+
+    def test_registry_does_not_treat_boolean_as_numeric_repository_id(self):
+        envelope = self.build()
+        envelope['repository']['id'] = 1
+        envelope['registry']['repository']['id'] = True
+        with self.assertRaisesRegex(ValueError, 'exact manifest projection'):
+            a.validate_envelope(envelope)
 
     def test_result_must_match_exact_source_config_tool_and_area_set(self):
         for change in [{'head': 'e' * 40}, {'base': 'f' * 40}, {'configSha256': '0' * 64}, {'desloppifyVersion': '0.9'}, {'scannerPatch': None}, {'scannerPatch': {'id': 'different', 'sha256': 'a' * 64}}, {'areas': []}, {'areas': [{'area': 'project-python'}, {'area': 'project-python'}]}, {'areas': ['not-an-area']}, {'schemaVersion': True}]:
