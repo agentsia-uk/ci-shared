@@ -99,6 +99,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: df210a1cf34f626cc5da0586271ae2310f615a38
+          persist-credentials: false
+          path: diagnostic-policy
       - uses: agentsia-uk/ci-shared/code_health@df210a1cf34f626cc5da0586271ae2310f615a38
         continue-on-error: true
         with:
@@ -106,6 +111,23 @@ jobs:
           base-sha: bd0b89f27fafea4bb2359e644d03c2c2b6c52fc8
           head-sha: bd9fe200f98c58e3724df55ddf03ffedf0fe0e63
           output-path: ${{ runner.temp }}/diagnostic-state
+      - name: Scan exact diagnostic commits without workflow provenance
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, os.path.join(os.environ['GITHUB_WORKSPACE'], 'diagnostic-policy'))
+          from code_health import cli
+          cli.execution_provenance = lambda *args: {}
+          sys.argv = ['diagnostic', '--repo', os.path.join(os.environ['GITHUB_WORKSPACE'], 'diagnostic-source'),
+                      '--base', 'bd0b89f27fafea4bb2359e644d03c2c2b6c52fc8',
+                      '--head', 'bd9fe200f98c58e3724df55ddf03ffedf0fe0e63',
+                      '--output', os.path.join(os.environ['RUNNER_TEMP'], 'diagnostic-state'),
+                      '--repository', 'agentsia-uk/ci-shared', '--action-repository', 'agentsia-uk/ci-shared',
+                      '--action-ref', 'df210a1cf34f626cc5da0586271ae2310f615a38',
+                      '--caller-ref', 'diagnostic', '--caller-sha', 'bd9fe200f98c58e3724df55ddf03ffedf0fe0e63']
+          sys.exit(cli.main())
+          PY
       - name: Encrypt diagnostic state
         shell: bash
         run: |
