@@ -2,6 +2,7 @@
 
 All output is untrusted: only the external controller evaluates it.
 """
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -105,6 +106,21 @@ def _scanner_fixture(policy, operation):
                 'hasSecurityError': any('security' in error for error in result['errors'])}
 
 
+
+def _scanner_mapping_fixture(policy):
+    patch = policy.scanner_patch
+    source = patch.scanner_source().read_bytes()
+    if hashlib.sha256(source).hexdigest() != patch.PATCHED_SHA256:
+        source = patch.patched_bytes(source)
+    namespace = {'__name__': 'desloppify.languages.typescript.test_coverage'}
+    exec(compile(source, '<candidate-scanner>', 'exec'), namespace)
+    mapping = namespace['map_test_to_source']
+    return {'sourceSha256': hashlib.sha256(source).hexdigest(),
+            'exact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
+            'ambiguousName': mapping('other/__tests__/health.test.ts', {'src/db/health.ts', 'src/api/routes/health.ts'}),
+            'ambiguousExact': mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/db/health.tsx'})}
+
+
 def observe(request, policy):
     if (not isinstance(request, dict) or set(request) != {'schemaVersion', 'caseId', 'operation', 'arguments'} or
             type(request['schemaVersion']) is not int or request['schemaVersion'] != 1 or
@@ -134,6 +150,8 @@ def observe(request, policy):
             value = None
         elif operation in {'scanner-new-area', 'scanner-security'} and not args:
             value = _scanner_fixture(policy, operation)
+        elif operation == 'scanner-mapping' and not args:
+            value = _scanner_mapping_fixture(policy)
         else:
             raise RuntimeError('unknown qualification operation')
     except ValueError as error:

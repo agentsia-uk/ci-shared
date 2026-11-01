@@ -15,7 +15,7 @@ def simulated_runner(*, image, candidate, bridge, case_id, request):
 class QualificationControllerTests(unittest.TestCase):
     def test_current_policy_matches_all_qualification_cases_in_local_simulation(self):
         self.assertEqual(run_qualification_cases(image=None, candidate=None, bridge=None, runner=simulated_runner), len(qualification_cases()))
-        self.assertEqual(len(qualification_cases()), 30)
+        self.assertEqual(len(qualification_cases()), 31)
 
     def test_candidate_cannot_forge_verdict_or_switch_cases(self):
         def forged(**kwargs):
@@ -54,6 +54,15 @@ class QualificationControllerTests(unittest.TestCase):
         observation = qualification_bridge.observe(request, BrokenSnapshot())
         with self.assertRaisesRegex(ValueError, 'disagrees'):
             evaluate_observation(observation, 'git-snapshot-escape', 'rejected')
+
+    def test_scanner_mapping_requires_expected_bytes_and_unambiguous_results(self):
+        expected = next(case[3] for case in qualification_cases() if case[0] == 'scanner-mapping')
+        for change in ({'sourceSha256': '0' * 64}, {'exact': 'src/api/routes/health.ts'},
+                       {'ambiguousName': 'src/db/health.ts'}, {'ambiguousExact': 'src/db/health.ts'}):
+            observation = {'schemaVersion': 1, 'caseId': 'scanner-mapping', 'outcome': 'returned',
+                           'value': {**expected, **change}}
+            with self.assertRaisesRegex(ValueError, 'disagrees'):
+                evaluate_observation(observation, 'scanner-mapping', expected)
 
     def test_scanner_security_requires_finding_and_full_coverage(self):
         expected = next(case[3] for case in qualification_cases() if case[0] == 'scanner-security')
