@@ -114,9 +114,9 @@ class PolicyTests(unittest.TestCase):
         args = SimpleNamespace(repository='agentsia-uk/example', repo=Path('.'), head='f' * 40, action_ref='a' * 40)
         def response(*_args, **_kwargs):
             return contextlib.closing(io.BytesIO(json.dumps([pr]).encode()))
-        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', side_effect=[b'e' * 40, json.dumps({'policyRef': 'a' * 40}).encode()]):
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', side_effect=[b'e' * 40, json.dumps({'policyRef': 'a' * 40}).encode()]):
             self.assertEqual({'pullRequest': 1, 'headSha': 'd' * 40}, r.upgrade_evidence(event, args, {'src/app.py', r.CONFIG}))
-        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
             self.assertIsNone(r.upgrade_evidence(event, args, {r.CONFIG}))
 
     def test_every_supported_source_language_requires_an_area(self):

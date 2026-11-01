@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from code_health.release_publish import BOT_ID, publish
 import code_health.release_publish as release_publish
+from code_health.cli import open_upgrade_api
 
 COMMIT = 'a' * 40
 TAG = 'code-health-' + COMMIT
@@ -252,11 +253,11 @@ class ReleasePublishTests(unittest.TestCase):
         try:
             request = urllib.request.Request(f'http://127.0.0.1:{origin.server_port}/',
                                              headers={'Authorization': 'Bearer synthetic-test-token'})
-            opener = getattr(release_publish, 'open_api', urllib.request.urlopen)
-            with self.assertRaises(urllib.error.HTTPError) as error:
-                opener(request, timeout=3)
-            self.assertEqual(error.exception.code, 302)
-            self.assertEqual(received, [])
+            for opener in (release_publish.open_api, open_upgrade_api):
+                with self.subTest(opener=opener.__name__), self.assertRaises(urllib.error.HTTPError) as error:
+                    opener(request, timeout=3)
+                self.assertEqual(error.exception.code, 302)
+                self.assertEqual(received, [])
         finally:
             for server in (origin, destination):
                 server.shutdown()
