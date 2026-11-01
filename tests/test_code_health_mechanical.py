@@ -81,6 +81,14 @@ class MechanicalProjectionTests(unittest.TestCase):
                 self.assertEqual(m.WITHHELD_SUMMARY, result['findings'][0]['summary'])
                 self.assertNotIn(secret, json.dumps(result))
 
+    def test_unfinished_private_key_markers_are_withheld_without_a_footer(self):
+        status, state = inputs()
+        marker = '-' * 5 + 'BEGIN ' + 'PRIVATE KEY' + '-' * 5
+        state['work_items']['one']['summary'] = marker * 20_000
+        result = project(status, state)
+        self.assertEqual(m.WITHHELD_SUMMARY, result['findings'][0]['summary'])
+        self.assertNotIn(marker, json.dumps(result))
+
     def test_output_boundary_refuses_secret_identity_and_scope_instead_of_rewriting_them(self):
         secret = 'g' + 'hp_' + 'Q7' * 18
         status, state = inputs()

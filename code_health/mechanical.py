@@ -25,7 +25,7 @@ WITHHELD_SUMMARY = '[summary withheld: matched secret pattern]'
 # Same base patterns used by Modelsmith's approved code-health normaliser.
 # ASCII boundaries match JavaScript regular-expression word boundaries.
 SECRET_PATTERNS = tuple(re.compile(pattern, flags | re.ASCII) for pattern, flags in [
-    (r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----', 0),
+    (r'-----BEGIN [A-Z ]*PRIVATE KEY-----', 0),
     (r'\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,})\b', 0),
     (r'sk-ant-api03-[A-Za-z0-9_-]{50,}', 0),
     (r'AIza[A-Za-z0-9_-]{30,}', 0),
