@@ -27,10 +27,12 @@ class ScannerEntrypointTests(unittest.TestCase):
             worker_pid = None
             try:
                 deadline = time.monotonic() + 10
-                while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                while process.poll() is None and time.monotonic() < deadline:
+                    if ready.exists() and ready.read_text().isdigit():
+                        worker_pid = int(ready.read_text())
+                        break
                     time.sleep(0.05)
-                self.assertTrue(ready.exists(), 'worker did not start')
-                worker_pid = int(ready.read_text())
+                self.assertIsNotNone(worker_pid, 'worker did not start')
                 process.send_signal(signal.SIGTERM)
                 self.assertNotEqual(process.wait(timeout=12), 0)
                 with self.assertRaises(ProcessLookupError):
