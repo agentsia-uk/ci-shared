@@ -40,7 +40,12 @@ def _verified_gh_fd(path: str) -> int:
 
 def read_command(argv: list[str], *, timeout: float = 120, limit: int = MAX_RESPONSE_BYTES) -> bytes:
     """Bound both output and elapsed time without retaining sensitive stderr."""
-    env = {key: value for key, value in os.environ.items() if key != 'RELEASE_ADMIN_READ_TOKEN'}
+    excluded = {'RELEASE_ADMIN_READ_TOKEN', 'GH_HOST', 'GH_ENTERPRISE_TOKEN', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+                'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'SSLKEYLOGFILE', 'GODEBUG',
+                'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'}
+    env = {key: value for key, value in os.environ.items()
+           if key.upper() not in excluded and not key.upper().startswith(('LD_', 'DYLD_', 'PYTHON', 'GIT_'))}
+    env.update(GH_HOST='github.com', GH_PROMPT_DISABLED='1', PATH='/usr/bin:/bin')
     pinned = os.environ.get('CODE_HEALTH_GH_EXECUTABLE') if argv[0] == GH_EXECUTABLE else None
     fd = _verified_gh_fd(pinned) if pinned else None
     try:

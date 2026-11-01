@@ -108,6 +108,14 @@ class ReleaseAttestationTests(unittest.TestCase):
             read_command([sys.executable, '-c', 'print("ok")'])
         self.assertTrue(children[0].stdout.closed)
 
+    def test_verifier_ignores_inherited_network_and_loader_overrides(self):
+        values = {'GH_HOST': 'example.invalid', 'HTTPS_PROXY': 'https://example.invalid',
+                  'SSL_CERT_FILE': '/tmp/untrusted', 'LD_PRELOAD': '/tmp/untrusted', 'GIT_CONFIG_COUNT': '1'}
+        with patch.dict('os.environ', values):
+            result = read_command([sys.executable, '-c',
+                'import os; print(os.getenv("GH_HOST")); print(any(k in os.environ for k in ("HTTPS_PROXY", "SSL_CERT_FILE", "LD_PRELOAD", "GIT_CONFIG_COUNT")))'])
+        self.assertEqual(result, b'github.com\nFalse\n')
+
     def test_read_only_administration_token_is_not_inherited_by_cli(self):
         with patch.dict('os.environ', {'RELEASE_ADMIN_READ_TOKEN': 'test-secret'}):
             result = read_command([sys.executable, '-c', 'import os; print("present" if "RELEASE_ADMIN_READ_TOKEN" in os.environ else "absent")'])
