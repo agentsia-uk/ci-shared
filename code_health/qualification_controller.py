@@ -40,6 +40,14 @@ def qualification_cases():
     mutable['policyRef'] = 'main'
     changed = copy.deepcopy(valid)
     changed['policyRef'] = 'c' * 40
+    narrowed = copy.deepcopy(valid)
+    narrowed['areas'][0]['path'] = 'subset'
+    unknown = copy.deepcopy(valid)
+    unknown['ignore'] = ['*']
+    duplicate = copy.deepcopy(valid)
+    duplicate['areas'].append(copy.deepcopy(duplicate['areas'][0]))
+    excluded = copy.deepcopy(valid)
+    excluded['areas'][0]['exclusions'] = [{'pattern': '.', 'kind': 'generated', 'rationale': 'all'}]
     finding = {'id': 'smells::src/a.py::unsafe', 'work_item_kind': 'mechanical_defect',
                'status': 'open', 'tier': 2, 'file': 'src/a.py', 'detector': 'smells', 'summary': 'unsafe'}
     minor = {**finding, 'tier': 4}
@@ -51,8 +59,12 @@ def qualification_cases():
         ('config-traversal', 'validate-config', {'config': traversal}, 'rejected'),
         ('config-lower-target', 'validate-config', {'config': lowered}, 'rejected'),
         ('config-mutable-pin', 'validate-config', {'config': mutable}, 'rejected'),
+        ('config-unknown-field', 'validate-config', {'config': unknown}, 'rejected'),
+        ('config-duplicate-area', 'validate-config', {'config': duplicate}, 'rejected'),
+        ('config-exclude-all', 'validate-config', {'config': excluded}, 'rejected'),
         ('transition-unauthorised', 'validate-transition', {'base': valid, 'head': changed, 'upgrade': False}, 'rejected'),
         ('transition-authorised', 'validate-transition', {'base': valid, 'head': changed, 'upgrade': True}, 'returned'),
+        ('transition-narrowed-area', 'validate-transition', {'base': valid, 'head': narrowed, 'upgrade': False}, 'rejected'),
         ('language-covered', 'validate-language-coverage', {'files': ['src/a.py'], 'areas': valid['areas']}, 'returned'),
         ('language-uncovered', 'validate-language-coverage', {'files': ['src/a.ts'], 'areas': valid['areas']}, 'rejected'),
         ('score-unchanged', 'compare', _compare(), _expected_comparison()),
