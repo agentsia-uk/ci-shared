@@ -506,8 +506,11 @@ def main():
             snapshot(repo, sha, root / name)
             (root / name).chmod(0o700)
         for area in head['areas']:
-            before = scan(root / 'base', area, root / 'scan-outputs' / area['id'] / 'base', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory) if area_has_source(base_files, area, head['areas']) else (None, None)
+            has_baseline = area_has_source(base_files, area, head['areas'])
+            before = scan(root / 'base', area, root / 'scan-outputs' / area['id'] / 'base', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory) if has_baseline and args.base != args.head else (None, None)
             after = scan(root / 'head', area, root / 'scan-outputs' / area['id'] / 'head', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory)
+            if has_baseline and args.base == args.head:
+                before = after
             if args.projection_repository_id is not None:
                 scan_config = read_json(root / 'head' / area['path'] / '.desloppify/config.json')
                 projection = project_mechanical(*after, area, scan_config,

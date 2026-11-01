@@ -56,10 +56,13 @@ class MechanicalProjectionTests(unittest.TestCase):
                  patch.object(cli, 'changed_paths', return_value=(set(), {})), \
                  patch.object(cli, 'execution_provenance', return_value={}), \
                  patch.object(cli, 'snapshot', side_effect=snapshot), \
-                 patch.object(cli, 'scan', return_value=(status, state)), \
-                 patch.object(cli, 'compare', return_value={'errors': [], 'objectiveAfter': 96, 'coverage': 'full'}), \
+                 patch.object(cli, 'scan', return_value=(status, state)) as scan, \
+                 patch.object(cli, 'compare', return_value={'errors': [], 'objectiveAfter': 96, 'coverage': 'full'}) as compare, \
                  patch('builtins.print'):
                 self.assertEqual(0, cli.main())
+            self.assertEqual(1, scan.call_count)
+            self.assertIs(compare.call_args.args[0], compare.call_args.args[2])
+            self.assertIs(compare.call_args.args[1], compare.call_args.args[3])
             projected = json.loads((output / 'projections/app-python.json').read_bytes())
             self.assertEqual(123, projected['repositoryId'])
             self.assertEqual(COMMIT, projected['commitSha'])
