@@ -65,3 +65,23 @@ jobs:
         run: docker pull "$QUALIFICATION_TEST_IMAGE"
       - name: Test effective isolation in a real container
         run: python3 -m unittest tests.test_qualification_container_integration -v
+
+  reader-arm64-integration:
+    name: Reader integration (Linux ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify actual reader bundle and load every supported reader
+        run: |
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-tool.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          unset PYTHONPATH PYTHONHOME
+          CODE_HEALTH_READER_INTEGRATION=1 "$tool_dir/bin/python" -m unittest tests.test_readers_integration -v

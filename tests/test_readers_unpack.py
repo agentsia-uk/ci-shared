@@ -93,9 +93,10 @@ class ReaderUnpackTests(unittest.TestCase):
         lock = readers_lock.ReaderLock('1.6.2', 'a' * 64, tuple(
             readers_lock.ReaderArchive(platform, 'unused', hashlib.sha256(data).hexdigest(), len(data))
             for platform in readers_lock.PLATFORMS))
-        check_reader_coverage(archives, lock, {'tsx'})
-        with self.assertRaisesRegex(ValueError, 'does not cover'):
-            check_reader_coverage(archives, lock, {'tsx', 'nim'})
+        with patch('code_health.build_release_bundle.system_platform.machine', return_value='fixture'):
+            check_reader_coverage(archives, lock, {'tsx'})
+            with self.assertRaisesRegex(ValueError, 'does not cover'):
+                check_reader_coverage(archives, lock, {'tsx', 'nim'})
 
 
 if __name__ == '__main__':

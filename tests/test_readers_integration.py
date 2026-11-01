@@ -2,6 +2,7 @@
 import os
 import ctypes
 from pathlib import Path
+import platform
 import subprocess
 import tempfile
 import unittest
@@ -33,7 +34,7 @@ class ReaderIntegrationTests(unittest.TestCase):
                                                                lock=lock, platform=archive.platform, destination_fd=fd)
                     finally:
                         os.close(fd)
-                    if archive.platform == 'linux-x86_64':
+                    if archive.platform == 'linux-' + platform.machine():
                         ctypes.CDLL('libstdc++.so.6', mode=ctypes.RTLD_GLOBAL)
                         pack.configure(cache_dir=directory)
                         os.chmod(directory, 0o500)
