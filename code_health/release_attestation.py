@@ -1,9 +1,11 @@
 """Verify an immutable policy asset and its pinned qualification workflow."""
+import hashlib
 import json
 import os
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import time
 
@@ -16,10 +18,37 @@ GH_EXECUTABLE = '/usr/bin/gh'
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
+def _verified_gh_fd(path: str) -> int:
+    from .prepare_release_gh import BINARY_SHA256, BINARY_SIZE
+    if not os.path.isabs(path) or not os.path.isdir('/proc/self/fd'):
+        raise ValueError('pinned GitHub CLI requires an absolute Linux path')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        metadata = os.fstat(fd)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid not in {0, os.geteuid()} or
+                metadata.st_mode & 0o022 or metadata.st_size != BINARY_SIZE):
+            raise ValueError('pinned GitHub CLI has unsafe metadata')
+        with os.fdopen(os.dup(fd), 'rb') as source:
+            digest = hashlib.file_digest(source, 'sha256').hexdigest()
+        if digest != BINARY_SHA256:
+            raise ValueError('pinned GitHub CLI binary does not match')
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def read_command(argv: list[str], *, timeout: float = 120, limit: int = MAX_RESPONSE_BYTES) -> bytes:
     """Bound both output and elapsed time without retaining sensitive stderr."""
     env = {key: value for key, value in os.environ.items() if key != 'RELEASE_ADMIN_READ_TOKEN'}
-    child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    pinned = os.environ.get('CODE_HEALTH_GH_EXECUTABLE') if argv[0] == GH_EXECUTABLE else None
+    fd = _verified_gh_fd(pinned) if pinned else None
+    try:
+        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, env=env,
+                                 **({'executable': f'/proc/self/fd/{fd}', 'pass_fds': (fd,)} if fd is not None else {}))
+    finally:
+        if fd is not None:
+            os.close(fd)
     deadline = time.monotonic() + timeout
     chunks = []
     total = 0
