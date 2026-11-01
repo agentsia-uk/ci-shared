@@ -34,6 +34,7 @@ class ReaderIntegrationTests(unittest.TestCase):
                     finally:
                         os.close(fd)
                     if archive.platform == 'linux-x86_64':
+                        ctypes.CDLL('libstdc++.so.6', mode=ctypes.RTLD_GLOBAL)
                         pack.configure(cache_dir=directory)
                         os.chmod(directory, 0o500)
                         try:
