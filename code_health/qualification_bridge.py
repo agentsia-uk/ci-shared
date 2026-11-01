@@ -137,6 +137,33 @@ def _scanner_mapping_fixture(policy):
             'unrelatedRelative': sorted(unrelated)}
 
 
+
+def _finding_move_fixture(policy, mode):
+    def finding(line, tier=4):
+        path = 'src/example.py'
+        return {'id': f'security::{path}::security::B506::{path}::{line}', 'file': path,
+                'detector': 'security', 'summary': 'possible unsafe operation', 'tier': tier,
+                'confidence': 'medium', 'status': 'open', 'work_item_kind': 'mechanical_defect',
+                'detail': {'source': 'bandit', 'line': line, 'kind': 'B506', 'test_name': 'yaml_load'}}
+    def state(item):
+        return {'version': 3, 'work_items': {'one': item},
+                'scan_coverage': {'python': {'status': 'full', 'detectors': {'security': {'status': 'full', 'confidence': 1}}}}}
+    with tempfile.TemporaryDirectory(prefix='qualification-finding-') as temporary:
+        root = Path(temporary)
+        base, head = root / 'base', root / 'head'
+        (base / 'src').mkdir(parents=True)
+        (head / 'src').mkdir(parents=True)
+        source = 'def validate(value):\n    return unsafe(value)\n'
+        (base / 'src/example.py').write_text(source)
+        new = source if mode != 'changed' else 'def validate(value):\n    return unsafe(value, other=True)\n'
+        (head / 'src/example.py').write_text('# inserted\n' + new)
+        tier = 2 if mode == 'high-priority' else 4
+        result = policy.compare({'objective_score': 90}, state(finding(2, tier)),
+                                {'objective_score': 90}, state(finding(3, tier)),
+                                {'src/example.py'}, {}, 'python', source_roots=(base, head))
+        return {'errors': result['errors']}
+
+
 def observe(request, policy):
     if (not isinstance(request, dict) or set(request) != {'schemaVersion', 'caseId', 'operation', 'arguments'} or
             type(request['schemaVersion']) is not int or request['schemaVersion'] != 1 or
@@ -168,6 +195,8 @@ def observe(request, policy):
             value = _scanner_fixture(policy, operation)
         elif operation == 'scanner-mapping' and not args:
             value = _scanner_mapping_fixture(policy)
+        elif operation == 'finding-move' and set(args) == {'mode'} and args['mode'] in {'unchanged', 'changed', 'high-priority'}:
+            value = _finding_move_fixture(policy, args['mode'])
         else:
             raise RuntimeError('unknown qualification operation')
     except ValueError as error:

@@ -22,8 +22,9 @@ import yaml
 from desloppify.languages import available_langs, get_lang
 
 if __package__:
-    from . import scanner_patch
+    from . import finding_identity, scanner_patch
 else:
+    import finding_identity
     import scanner_patch
 
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
@@ -297,7 +298,10 @@ def detector_coverage(state, language):
     return {k: (v.get('status'), v.get('confidence')) for k, v in record['detectors'].items()}
 
 
-def compare(base_status, base_state, head_status, head_state, touched, renames, language):
+def compare(base_status, base_state, head_status, head_state, touched, renames, language, *, source_roots=None):
+    identities = finding_identity.FindingIdentity(*source_roots) if source_roots is not None else None
+    def key(finding, mapping, side):
+        return identities.fingerprint(finding, mapping, side) if identities is not None else fingerprint(finding, mapping)
     errors = []
     score_after = objective_score(head_status)
     coverage_after = detector_coverage(head_state, language)
@@ -306,14 +310,14 @@ def compare(base_status, base_state, head_status, head_state, touched, renames, 
     else:
         score_before = objective_score(base_status)
         require(detector_coverage(base_state, language) == coverage_after, 'detector coverage changed between scans; scores are not comparable')
-        before = Counter(fingerprint(f, renames) for f in mechanical_findings(base_state))
+        before = Counter(key(f, renames, 'base') for f in mechanical_findings(base_state))
         if score_after < score_before:
             errors.append(f'objective score decreased: {score_before} -> {score_after}')
     after = mechanical_findings(head_state)
     introduced = Counter()
     for finding in after:
         if finding_paths(finding) & touched:
-            introduced[fingerprint(finding, {})] += 1
+            introduced[key(finding, {}, 'head')] += 1
             if finding['tier'] in POLICY['ratchet']['touchedTiersMustBeClear']:
                 errors.append(f'T{finding["tier"]} remains in touched path: {finding["file"]} ({finding["detector"]})')
     for key, count in (introduced - before).items():
@@ -452,7 +456,7 @@ def main():
         for area in head['areas']:
             before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas']) if area_has_source(base_files, area, head['areas']) else (None, None)
             after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'])
-            result = compare(*before, *after, touched, renames, area['language'])
+            result = compare(*before, *after, touched, renames, area['language'], source_roots=(root / 'base', root / 'head'))
             results.append({'area': area['id'], **result})
     report = {
         'schemaVersion': 1,

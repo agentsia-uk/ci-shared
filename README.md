@@ -98,8 +98,12 @@ The reusable `shared-code-health.yml` workflow runs full base and candidate
 scans with the same pinned scanner. It refuses an objective-score decrease,
 new mechanical findings in touched files, and remaining T1/T2 findings in
 those files. A cross-file finding counts when any related file is touched.
-Git renames preserve the identity of inherited lower-priority findings.
-Changed detector coverage fails closed. A genuinely new project/language area
+Git renames preserve the identity of inherited lower-priority findings. For
+Python Bandit findings, a changed line number preserves identity only when every
+containing undecorated function or class is unique and byte-for-byte unchanged
+in both source snapshots. Changed, ambiguous, inaccessible or unparseable source
+is treated as new; other detectors retain their native identity rules. High-priority
+findings in touched files still block. Changed detector coverage fails closed. A genuinely new project/language area
 records `objectiveBefore: null` and `baselineKind: new-area`; the candidate is
 scanned and its new touched findings still fail, without inventing a previous
 score. Existing reduced coverage is reported
