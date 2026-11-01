@@ -4,6 +4,7 @@ All output is untrusted: only the external controller evaluates it.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -93,18 +94,33 @@ def _scanner_fixture(policy, operation):
         after.mkdir()
         (before / 'service.py').write_text('def handle(value):\n    return str(value)\n')
         (after / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
-        if operation == 'scanner-new-area':
-            status, state = policy.scan(before, area, root / 'before-result', [area])
-            result = policy.compare(None, None, status, state, {'service.py'}, {}, 'python')
-            return {'baselineKind': result['baselineKind'], 'objectiveBefore': result['objectiveBefore'],
-                    'errors': result['errors']}
-        base_status, base_state = policy.scan(before, area, root / 'before-result', [area])
-        head_status, head_state = policy.scan(after, area, root / 'after-result', [area])
-        result = policy.compare(base_status, base_state, head_status, head_state, {'service.py'}, {}, 'python')
-        security = head_state['scan_coverage']['python']['detectors'].get('security', {})
-        return {'securityCoverage': security.get('status'),
-                'hasSecurityFinding': any(f.get('detector') == 'security' for f in head_state['work_items'].values()),
-                'hasSecurityError': any('security' in error for error in result['errors'])}
+        def inside_sandbox(*, image, source, readers, output, arguments):
+            del image, readers
+            executable = str(Path(sys.executable).with_name('desloppify'))
+            args = [str(output / 'state.json') if arg == '/output/state.json' else arg for arg in arguments]
+            env = {'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
+                   'HOME': str(root), 'DESLOPPIFY_ROOT': str(source), 'CI': 'true', 'NO_COLOR': '1',
+                   'npm_config_yes': 'false'}
+            return subprocess.run([executable, *args], cwd=source, env=env, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, timeout=120, check=True).stdout
+        original = policy.scanner_container.run_scanner
+        policy.scanner_container.run_scanner = inside_sandbox
+        try:
+            kwargs = {'scanner_image': 'qualification-container', 'readers': root}
+            if operation == 'scanner-new-area':
+                status, state = policy.scan(before, area, root / 'before-result', [area], **kwargs)
+                result = policy.compare(None, None, status, state, {'service.py'}, {}, 'python')
+                return {'baselineKind': result['baselineKind'], 'objectiveBefore': result['objectiveBefore'],
+                        'errors': result['errors']}
+            base_status, base_state = policy.scan(before, area, root / 'before-result', [area], **kwargs)
+            head_status, head_state = policy.scan(after, area, root / 'after-result', [area], **kwargs)
+            result = policy.compare(base_status, base_state, head_status, head_state, {'service.py'}, {}, 'python')
+            security = head_state['scan_coverage']['python']['detectors'].get('security', {})
+            return {'securityCoverage': security.get('status'),
+                    'hasSecurityFinding': any(f.get('detector') == 'security' for f in head_state['work_items'].values()),
+                    'hasSecurityError': any('security' in error for error in result['errors'])}
+        finally:
+            policy.scanner_container.run_scanner = original
 
 
 
