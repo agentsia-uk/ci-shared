@@ -22,8 +22,10 @@ from desloppify.languages import available_langs, get_lang
 
 if __package__:
     from . import dismissals
+    from .github_http import open_metadata
 else:
     import dismissals
+    from github_http import open_metadata
 
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
@@ -170,7 +172,7 @@ def upgrade_evidence(event, args, touched):
     for page in range(1, 101):
         query = urllib.parse.urlencode({'state': 'open', 'base': branch, 'per_page': 100, 'page': page})
         request = urllib.request.Request(f'https://api.github.com/repos/{args.repository}/pulls?{query}', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'})
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with open_metadata(request, timeout=30) as response:
             prs = json.load(response)
         require(isinstance(prs, list), 'invalid upgrade PR metadata')
         for pr in prs:

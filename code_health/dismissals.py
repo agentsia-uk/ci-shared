@@ -10,6 +10,11 @@ import re
 import urllib.parse
 import urllib.request
 
+if __package__:
+    from .github_http import open_metadata
+else:
+    from github_http import open_metadata
+
 from desloppify.engine.plan_ops import append_log_entry, skip_items
 from desloppify.engine.plan_state import empty_plan, plan_path_for_state, save_plan
 from desloppify.state_compat import load_state, match_issues, resolve_issues, save_state
@@ -66,7 +71,7 @@ def github_reader(repository, token):
     def read(path):
         if path not in cache:
             request = urllib.request.Request(f'https://api.github.com/repos/{repository}/{path}', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'})
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with open_metadata(request, timeout=30) as response:
                 raw = response.read(4 * MAX_LEDGER_BYTES + 1)
             check(len(raw) <= 4 * MAX_LEDGER_BYTES, 'dismissal metadata exceeds the bounded response size')
             cache[path] = json.loads(raw)
