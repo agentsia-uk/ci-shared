@@ -9,13 +9,15 @@ import re
 import stat
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
 import tarfile
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from .release_bundle import COMMIT, MAX_BUNDLE_BYTES
-from .readers_lock import ASSET_NAMES, MAX_ARCHIVE_BYTES, PLATFORMS, locked_package_version, required_grammars, verify_archive, verify_manifest
+from .readers_lock import ASSET_NAMES, MAX_ARCHIVE_BYTES, PLATFORMS, locked_package_version, required_grammars, unpack_archive, verify_archive, verify_manifest
 
 RUNTIME_SOURCE = re.compile(r'code_health/[a-z_][a-z0-9_]*\.py\Z')
 
@@ -42,6 +44,27 @@ def download_reader_archives(lock):
             data = response.read(MAX_ARCHIVE_BYTES + 1)
         archives[entry.platform] = verify_archive(data, lock=lock, platform=entry.platform)
     return archives
+
+
+def check_reader_coverage(archives, lock, grammars):
+    """Confirm each verified archive contains every reader the scanner requires."""
+    for platform in sorted(PLATFORMS):
+        with tempfile.TemporaryDirectory(prefix='code-health-readers-') as directory:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                unpack_archive(archives[platform], lock=lock, platform=platform, destination_fd=fd)
+            finally:
+                os.close(fd)
+            program = ('import json,sys,tree_sitter_language_pack as p; '
+                       'p.configure(cache_dir=sys.argv[1]); print(json.dumps(p.downloaded_languages()))')
+            output = subprocess.run([sys.executable, '-I', '-c', program, directory], check=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60).stdout
+            if len(output) > 1024 * 1024:
+                raise ValueError('reader inventory exceeds its size limit')
+            inventory = json.loads(output)
+            if (not isinstance(inventory, list) or any(not isinstance(name, str) for name in inventory)
+                    or not grammars <= set(inventory)):
+                raise ValueError(f'{platform} reader archive does not cover the selected scanner')
 
 
 def runtime_files(repo: str | os.PathLike[str], commit: str) -> set[str]:
@@ -125,6 +148,7 @@ def build_bundle(repo: str | os.PathLike[str], commit: str, allowed_files: set[s
         if (not isinstance(reader_archives, dict) or set(reader_archives) != PLATFORMS
                 or not set(ASSET_NAMES.values()) <= paths):
             raise ValueError('verified reader archives are missing')
+        check_reader_coverage(reader_archives, lock, required_grammars())
         for platform, name in sorted(ASSET_NAMES.items()):
             data = verify_archive(reader_archives[platform], lock=lock, platform=platform)
             total += len(data)

@@ -10,6 +10,7 @@ from unittest.mock import patch
 import zstandard
 
 from code_health import readers_lock
+from code_health.build_release_bundle import check_reader_coverage
 
 
 def bundle(entries):
@@ -85,6 +86,16 @@ class ReaderUnpackTests(unittest.TestCase):
             os.chmod(directory, 0o755)
             with self.assertRaisesRegex(ValueError, 'empty private'):
                 self.unpack(directory, data)
+
+    def test_archive_coverage_checks_actual_libraries_on_both_platforms(self):
+        data = bundle([('./libtree_sitter_tsx.so', b'tsx', 'file')])
+        archives = {platform: data for platform in readers_lock.PLATFORMS}
+        lock = readers_lock.ReaderLock('1.6.2', 'a' * 64, tuple(
+            readers_lock.ReaderArchive(platform, 'unused', hashlib.sha256(data).hexdigest(), len(data))
+            for platform in readers_lock.PLATFORMS))
+        check_reader_coverage(archives, lock, {'tsx'})
+        with self.assertRaisesRegex(ValueError, 'does not cover'):
+            check_reader_coverage(archives, lock, {'tsx', 'nim'})
 
 
 if __name__ == '__main__':
