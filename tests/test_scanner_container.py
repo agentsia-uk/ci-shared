@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -10,6 +11,12 @@ from code_health import scanner_container
 
 
 class ScannerContainerTests(unittest.TestCase):
+    def test_scanner_output_keeps_standard_error_out_of_json_and_is_bounded(self):
+        command = [sys.executable, '-c', 'import sys; print("{}") ; print("warning", file=sys.stderr)']
+        self.assertEqual(b'{}\n', scanner_container._capture(command, {'PATH': os.defpath}))
+        with patch.object(scanner_container, 'MAX_LOG_BYTES', 4), self.assertRaisesRegex(ValueError, 'exceeds'):
+            scanner_container._capture(command, {'PATH': os.defpath})
+
     def test_inspection_rejects_network_even_when_other_settings_match(self):
         image = 'sha256:' + 'b' * 64
         mounts = [(Path('/source'), '/source', 'readonly'), (Path('/readers'), '/readers', 'readonly'),

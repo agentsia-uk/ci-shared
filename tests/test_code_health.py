@@ -2,6 +2,7 @@ import copy
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -243,6 +244,7 @@ class RatchetTests(unittest.TestCase):
             self.assertEqual({'old name.py', 'new name.py', 'removed.py'}, touched)
             self.assertEqual({'old name.py': 'new name.py'}, renames)
 
+    @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_cli_scans_real_git_snapshots_and_ignores_committed_local_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -266,7 +268,7 @@ class RatchetTests(unittest.TestCase):
             git('commit', '-qm', 'after')
             head = git('rev-parse', 'HEAD')
             output = root / 'result'
-            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head]
+            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head, '--scanner-image', os.environ['CODE_HEALTH_TEST_IMAGE'], '--reader-directory', os.environ['CODE_HEALTH_TEST_READERS']]
             with patch.object(r.sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(1, r.main())
             report = json.loads((output / 'result.json').read_text())
@@ -276,15 +278,18 @@ class RatchetTests(unittest.TestCase):
             self.assertNotIn('eval(', json.dumps(report))
             self.assertEqual(r.POLICY['desloppifyVersion'], report['desloppifyVersion'])
 
+    @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_new_area_has_no_fabricated_baseline_score(self):
         area = dict(config()['areas'][0], path='new-project')
         self.assertFalse(r.area_has_source(['README.md'], area, [area]))
         self.assertTrue(r.area_has_source(['new-project/service.py'], area, [area]))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            (root / 'new-project').mkdir()
-            (root / 'new-project/service.py').write_text('def handle(value):\n    return str(value)\n')
-            status, scanned = r.scan(root, area, root / 'result', [area])
+            source = root / 'source'
+            source.mkdir(mode=0o700)
+            (source / 'new-project').mkdir()
+            (source / 'new-project/service.py').write_text('def handle(value):\n    return str(value)\n')
+            status, scanned = r.scan(source, area, root / 'result', [area], scanner_image=os.environ['CODE_HEALTH_TEST_IMAGE'], readers=Path(os.environ['CODE_HEALTH_TEST_READERS']))
             result = r.compare(None, None, status, scanned, {'new-project/service.py'}, {}, 'python')
             self.assertIsNone(result['objectiveBefore'])
             self.assertEqual('new-area', result['baselineKind'])
@@ -292,17 +297,18 @@ class RatchetTests(unittest.TestCase):
             unsafe = state([finding('new-project/service.py', tier=2)])
             self.assertTrue(r.compare(None, None, {'objective_score': 95}, unsafe, {'new-project/service.py'}, {}, 'python')['errors'])
 
+    @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_actual_scanner_rejects_new_security_defect(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             before, after = root / 'base', root / 'head'
-            before.mkdir()
-            after.mkdir()
+            before.mkdir(mode=0o700)
+            after.mkdir(mode=0o700)
             (before / 'service.py').write_text('def handle(value):\n    return str(value)\n')
             (after / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
             area = config()['areas'][0]
-            base_status, base_state = r.scan(before, area, root / 'base-result', [area])
-            head_status, head_state = r.scan(after, area, root / 'head-result', [area])
+            base_status, base_state = r.scan(before, area, root / 'base-result', [area], scanner_image=os.environ['CODE_HEALTH_TEST_IMAGE'], readers=Path(os.environ['CODE_HEALTH_TEST_READERS']))
+            head_status, head_state = r.scan(after, area, root / 'head-result', [area], scanner_image=os.environ['CODE_HEALTH_TEST_IMAGE'], readers=Path(os.environ['CODE_HEALTH_TEST_READERS']))
             result = r.compare(base_status, base_state, head_status, head_state, {'service.py'}, {}, 'python')
             self.assertTrue(result['errors'])
             self.assertTrue(any('security' in error for error in result['errors']))
@@ -311,28 +317,26 @@ class RatchetTests(unittest.TestCase):
 
     def test_scanner_uses_pinned_config_and_drops_credential_environment(self):
         calls = []
-        def fake_run(args, *, cwd, env=None):
-            calls.append((args, env))
-            if 'scan' in args:
-                output = Path(args[args.index('--state') + 1])
-                output.write_text(json.dumps(state()))
+        def fake_run(*, image, source, readers, output, arguments):
+            calls.append((image, source, readers, output, arguments))
+            if 'scan' in arguments:
+                (output / 'state.json').write_text(json.dumps(state()))
                 return b'log'
             return b'{"objective_score": 90}'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / 'repo'
             root.mkdir()
             (root / 'training').mkdir()
-            with patch.object(r, 'run', side_effect=fake_run), patch.dict(r.os.environ, {'GH_TOKEN': 'do-not-forward', 'OPENAI_API_KEY': 'do-not-forward', 'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}):
-                r.scan(root, config()['areas'][0], Path(temporary) / 'output', [*config()['areas'], {'path': 'training'}])
+            with patch.object(r.sys, 'platform', 'linux'), patch.object(r, 'verify_scanner'), \
+                    patch.object(r.scanner_container, 'run_scanner', side_effect=fake_run), \
+                    patch.dict(r.os.environ, {'GH_TOKEN': 'do-not-forward', 'OPENAI_API_KEY': 'do-not-forward', 'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}):
+                r.scan(root, config()['areas'][0], Path(temporary) / 'output', [*config()['areas'], {'path': 'training'}], scanner_image='image', readers=Path(temporary) / 'readers')
             scanner_config = json.loads((root / '.desloppify/config.json').read_text())
             self.assertFalse(scanner_config['trust_plugins'])
             self.assertFalse(scanner_config['hermes_enabled'])
             self.assertEqual(['training'], scanner_config['exclude'])
-            self.assertIn('--profile', calls[0][0])
-            for _, env in calls:
-                self.assertNotIn('GH_TOKEN', env)
-                self.assertNotIn('OPENAI_API_KEY', env)
-                self.assertNotIn('CODE_HEALTH_GITHUB_TOKEN', env)
+            self.assertIn('--profile', calls[0][-1])
+            self.assertEqual({'PATH', 'HOME', 'DOCKER_CONFIG'}, set(r.scanner_container.ENVIRONMENT))
 
 
 if __name__ == '__main__':

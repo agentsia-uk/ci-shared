@@ -16,24 +16,29 @@ MAX_LOG_BYTES = 64 * 1024 * 1024
 
 
 def _capture(command, env):
-    child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     deadline = time.monotonic() + 1800
     chunks = []
     size = 0
     try:
         with selectors.DefaultSelector() as selector:
             selector.register(child.stdout, selectors.EVENT_READ)
-            while True:
+            selector.register(child.stderr, selectors.EVENT_READ)
+            while selector.get_map():
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
+                events = selector.select(max(0, remaining))
+                if remaining <= 0 or not events:
                     raise TimeoutError('isolated scanner timed out')
-                chunk = os.read(child.stdout.fileno(), min(65536, MAX_LOG_BYTES - size + 1))
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_LOG_BYTES:
-                    raise ValueError('scanner output exceeds its size limit')
-                chunks.append(chunk)
+                for key, _ in events:
+                    chunk = os.read(key.fileobj.fileno(), min(65536, MAX_LOG_BYTES - size + 1))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    size += len(chunk)
+                    if size > MAX_LOG_BYTES:
+                        raise ValueError('scanner output exceeds its size limit')
+                    if key.fileobj is child.stdout:
+                        chunks.append(chunk)
         if child.wait(timeout=max(0, deadline - time.monotonic())):
             raise ValueError('isolated scanner failed')
         return b''.join(chunks)
@@ -42,6 +47,7 @@ def _capture(command, env):
             child.kill()
         child.wait()
         child.stdout.close()
+        child.stderr.close()
 
 
 def _inspect(container, image, mounts, env):

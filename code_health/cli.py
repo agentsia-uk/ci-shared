@@ -21,11 +21,9 @@ import yaml
 
 from desloppify.languages import available_langs, get_lang
 
-if __package__:
-    from . import finding_identity, scanner_patch
-else:
-    import finding_identity
-    import scanner_patch
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from code_health import finding_identity, scanner_container, scanner_patch
 
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
@@ -384,9 +382,10 @@ def verify_scanner():
     scanner_patch.verify()
 
 
-def scan(snapshot_root, area, output, areas):
+def scan(snapshot_root, area, output, areas, *, scanner_image=None, readers=None):
     require(sys.platform == 'linux', 'trusted code-health scanning requires Linux')
     verify_scanner()
+    require(scanner_image is not None and readers is not None, 'verified scanner image and readers are required')
     snapshot_root = snapshot_root.resolve()
     root = (snapshot_root / area['path']).resolve()
     require(root.is_relative_to(snapshot_root) and root.is_dir(), 'scan area is missing or escapes its snapshot')
@@ -398,18 +397,14 @@ def scan(snapshot_root, area, output, areas):
     for location in {snapshot_root, root}:
         (location / '.desloppify').mkdir(exist_ok=True)
         (location / '.desloppify/config.json').write_text(json.dumps(config))
-    env = {key: os.environ[key] for key in ['PATH', 'HOME', 'TMPDIR', 'SYSTEMROOT', 'LANG'] if key in os.environ}
-    private_home = snapshot_root.parent / 'scanner-home'
-    private_home.mkdir(exist_ok=True)
-    env['HOME'] = str(private_home)
-    env['PATH'] = str(Path(sys.executable).parent) + os.pathsep + env.get('PATH', '')
-    env.update({'DESLOPPIFY_ROOT': str(snapshot_root), 'NO_COLOR': '1', 'CI': 'true', 'npm_config_yes': 'false'})
     state = output / 'state.json'
-    output.mkdir(parents=True)
-    command = [str(Path(sys.executable).with_name('desloppify')), '--lang', area['language']]
-    log = run(command + ['scan', '--path', area['path'], '--profile', 'ci', '--no-badge', '--state', str(state)], cwd=snapshot_root, env=env)
+    output.mkdir(parents=True, mode=0o700)
+    command = ['--lang', area['language']]
+    log = scanner_container.run_scanner(image=scanner_image, source=snapshot_root, readers=readers, output=output,
+        arguments=command + ['scan', '--path', area['path'], '--profile', 'ci', '--no-badge', '--state', '/output/state.json'])
     (output / 'scan.log').write_bytes(log)
-    status = run(command + ['status', '--state', str(state), '--json'], cwd=snapshot_root, env=env)
+    status = scanner_container.run_scanner(image=scanner_image, source=snapshot_root, readers=readers, output=output,
+        arguments=command + ['status', '--state', '/output/state.json', '--json'])
     (output / 'status.json').write_bytes(status)
     return json.loads(status), read_json(state)
 
@@ -425,6 +420,8 @@ def main():
     parser.add_argument('--action-ref', required=True)
     parser.add_argument('--caller-ref', required=True)
     parser.add_argument('--caller-sha', required=True)
+    parser.add_argument('--scanner-image', required=True)
+    parser.add_argument('--reader-directory', required=True, type=Path)
     args = parser.parse_args()
     require(re.fullmatch('[0-9a-f]{40}', args.base) and re.fullmatch('[0-9a-f]{40}', args.head), 'base and head must be full commit SHAs')
     require(version('desloppify') == POLICY['desloppifyVersion'], 'installed scanner version differs from the shared pin')
@@ -454,9 +451,10 @@ def main():
         root = Path(temporary)
         for name, sha in [('base', args.base), ('head', args.head)]:
             snapshot(repo, sha, root / name)
+            (root / name).chmod(0o700)
         for area in head['areas']:
-            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas']) if area_has_source(base_files, area, head['areas']) else (None, None)
-            after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'])
+            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory) if area_has_source(base_files, area, head['areas']) else (None, None)
+            after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory)
             result = compare(*before, *after, touched, renames, area['language'], source_roots=(root / 'base', root / 'head'))
             results.append({'area': area['id'], **result})
     report = {
