@@ -170,11 +170,53 @@ Scanner configuration is reconstructed with plugins and model runners disabled; 
 Desloppify state is ignored. Only the sanitised `result.json` is uploaded.
 Raw state and logs can contain source excerpts and must stay private.
 
-This first release provides the contract and executable mechanical gate.
-It does **not** activate an organisation ruleset, onboard other repositories,
-schedule monthly reviews, create weekly upgrade PRs, publish points to the
-Code Health dashboard, or import recorded finding dismissals. Those consumers
-and automation must be delivered separately. Weekly tool upgrades, deliberate
+#### Audited finding decisions
+
+Agents record a false positive or a deliberate `wontfix` in
+`.github/code-health-dismissals.json`, with `schemaVersion: 1` and an `entries`
+list. Each entry has exactly these fields:
+
+```json
+{
+  "area": "app-python",
+  "findingId": "<complete native finding ID>",
+  "findingSha256": "<hash of the finding evidence>",
+  "sourceSha256": {"src/example.py": "<SHA-256 of the exact source bytes>"},
+  "status": "false_positive",
+  "toolVersion": "1.0",
+  "rationale": "<why this finding is not a defect, or why it will not be fixed>",
+  "attestation": "I have reviewed this decision against the code and I am not gaming the score by suppressing a real defect.",
+  "pullRequest": 123
+}
+```
+
+Use `code_health.dismissals.finding_hash(finding)` for the evidence hash and
+`source_hashes(snapshot_root, finding)` for every primary and related source
+file. `audit_block(entry)` produces the exact JSON block that must also appear
+in that PR's body. No detector-wide, path-wide or pattern decisions are imported.
+
+The verifier reads live GitHub metadata using its read-only token. The referenced
+PR must be from this repository, authored by a repository writer, contain the exact
+record in its head ledger and include its complete audit block in the body. An
+open PR's head must be an ancestor of the candidate; a merged PR's merge commit
+must be an ancestor instead, so squash merges retain their audit trail. Closed,
+unmerged PRs do not authorise imports. Missing metadata refuses the run.
+
+The same authenticated decisions are considered in both fresh scans. A decision
+only applies when the exact finding evidence and all source hashes still match;
+stale records remain in the ledger but are reported as inactive and cannot hide
+changed code. The credential-free scanner process imports applicable records
+through Desloppify's native resolution and plan APIs, retaining the original
+rationale, attestation, author and PR reference in the native plan. Its native
+status command recomputes the score. A `false_positive` removes a nondefect;
+`wontfix` remains strict debt and still fails the touched T1/T2 rule. Published
+results contain aggregate import counts and the ledger hash, without source
+excerpts or the raw plan.
+
+Installing this release does not itself activate an organisation ruleset,
+onboard other repositories, schedule monthly reviews, create weekly upgrade
+PRs or publish dashboard points. Those consumers and automation must be
+delivered separately. Weekly tool upgrades, deliberate
 scope migrations and their calibration records still need a dedicated
 reviewed migration path. Scanner-policy pin changes already require a
 same-repository PR authored by `github-actions[bot]`, with an
