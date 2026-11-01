@@ -14,6 +14,10 @@ REJECTION_REASONS = {
     'config-unknown-field': 'unknown code-health config field',
     'config-duplicate-area': 'duplicate area id',
     'config-exclude-all': 'an exclusion cannot hide the whole area',
+    'config-exclude-stars': 'an exclusion cannot hide the whole area',
+    'config-exclude-question': 'an exclusion cannot hide the whole area',
+    'config-exclude-nested': 'an exclusion cannot hide the whole area',
+    'config-path-alias': 'path must use its canonical POSIX spelling',
     'transition-unauthorised': 'policy changes require a dedicated authorized upgrade PR',
     'transition-narrowed-area': 'existing scan areas and exclusions cannot change in an ordinary PR',
     'language-uncovered': 'supported source file is outside declared language areas: src/a.ts',
@@ -68,6 +72,14 @@ def qualification_cases():
     duplicate['areas'].append(copy.deepcopy(duplicate['areas'][0]))
     excluded = copy.deepcopy(valid)
     excluded['areas'][0]['exclusions'] = [{'pattern': '.', 'kind': 'generated', 'rationale': 'all'}]
+    stars = copy.deepcopy(excluded)
+    stars['areas'][0]['exclusions'][0]['pattern'] = '***'
+    question = copy.deepcopy(excluded)
+    question['areas'][0]['exclusions'][0]['pattern'] = '*?*'
+    nested = copy.deepcopy(excluded)
+    nested['areas'][0]['exclusions'][0]['pattern'] = '**/**'
+    alias = copy.deepcopy(excluded)
+    alias['areas'][0]['exclusions'][0]['pattern'] = './**/*'
     finding = {'id': 'smells::src/a.py::unsafe', 'work_item_kind': 'mechanical_defect',
                'status': 'open', 'tier': 2, 'file': 'src/a.py', 'detector': 'smells', 'summary': 'unsafe'}
     minor = {**finding, 'tier': 4}
@@ -88,6 +100,10 @@ def qualification_cases():
         ('config-unknown-field', 'validate-config', {'config': unknown}, 'rejected'),
         ('config-duplicate-area', 'validate-config', {'config': duplicate}, 'rejected'),
         ('config-exclude-all', 'validate-config', {'config': excluded}, 'rejected'),
+        ('config-exclude-stars', 'validate-config', {'config': stars}, 'rejected'),
+        ('config-exclude-question', 'validate-config', {'config': question}, 'rejected'),
+        ('config-exclude-nested', 'validate-config', {'config': nested}, 'rejected'),
+        ('config-path-alias', 'validate-config', {'config': alias}, 'rejected'),
         ('transition-unauthorised', 'validate-transition', {'base': valid, 'head': changed, 'upgrade': False}, 'rejected'),
         ('transition-authorised', 'validate-transition', {'base': valid, 'head': changed, 'upgrade': True}, 'returned'),
         ('transition-narrowed-area', 'validate-transition', {'base': valid, 'head': narrowed, 'upgrade': False}, 'rejected'),
