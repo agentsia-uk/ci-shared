@@ -22,8 +22,11 @@ runs:
         POLICY_ROOT: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        python -m pip install --disable-pip-version-check --require-hashes -r "${POLICY_ROOT}/requirements.lock"
-        python "${POLICY_ROOT}/scanner_patch.py"
+        tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-tool.XXXXXXXX")
+        python -I -m venv "$tool_dir"
+        "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --require-hashes -r "${POLICY_ROOT}/requirements.lock"
+        "$tool_dir/bin/python" -I "${POLICY_ROOT}/scanner_patch.py"
+        printf 'CODE_HEALTH_PYTHON=%s/bin/python\n' "$tool_dir" >> "$GITHUB_ENV"
     - name: Compare full scans
       shell: bash
       env:
@@ -40,7 +43,7 @@ runs:
         CODE_HEALTH_GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        python "${POLICY_ROOT}/cli.py" --repo "${REPOSITORY_PATH}" \
+        "${CODE_HEALTH_PYTHON:?}" -I -c 'import runpy,sys; root=sys.argv.pop(1); sys.path.insert(0,root); runpy.run_path(root+"/cli.py",run_name="__main__")' "${POLICY_ROOT}" --repo "${REPOSITORY_PATH}" \
           --base "${BASE_SHA}" --head "${HEAD_SHA}" --output "${OUTPUT_PATH}" \
           --repository "${CALLER_REPOSITORY}" --action-repository "${EXECUTING_ACTION_REPOSITORY}" \
           --action-ref "${EXECUTING_ACTION_REF}" --caller-ref "${CALLER_WORKFLOW_REF}" \
