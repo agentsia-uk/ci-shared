@@ -120,6 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${CODE_HEALTH_SCANNER_IMAGE:-}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          test -f "${CODE_HEALTH_READERS:?}/libtree_sitter_nim.so"
-          test -x "${CODE_HEALTH_PYTHON:?}"
+          [[ "${CODE_HEALTH_READERS:?}" == "${CODE_HEALTH_TASK_DIR:?}/readers" ]]
+          [[ "${CODE_HEALTH_PYTHON:?}" == "${CODE_HEALTH_TASK_DIR:?}/tool/bin/python" ]]
+          test ! -e "$CODE_HEALTH_TASK_DIR"
           docker image inspect "$CODE_HEALTH_SCANNER_IMAGE" >/dev/null
