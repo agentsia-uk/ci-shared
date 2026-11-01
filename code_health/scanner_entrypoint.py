@@ -25,8 +25,10 @@ def make_output_accessible(root):
             metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
             if stat.S_ISLNK(metadata.st_mode):
                 continue
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            if not stat.S_ISREG(metadata.st_mode):
                 raise ValueError('scanner output contains an unsafe file')
+            if metadata.st_uid != os.geteuid():
+                continue
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
             try:
                 opened = os.fstat(fd)
