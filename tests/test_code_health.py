@@ -194,6 +194,20 @@ class RatchetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             r.compare({'objective_score': 90}, state(), {'objective_score': 90}, {}, set(), {}, 'python')
 
+    def test_malformed_detector_confidence_cannot_look_comparable(self):
+        for value in (True, False, None, float('nan'), float('inf'), -0.1, 1.1, '1'):
+            broken = state()
+            broken['scan_coverage']['python']['detectors']['smells']['confidence'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                r.compare({'objective_score': 90}, state(), {'objective_score': 90}, broken, set(), {}, 'python')
+            with self.subTest(equal_invalid_value=value), self.assertRaises(ValueError):
+                r.compare({'objective_score': 90}, broken, {'objective_score': 90}, broken, set(), {}, 'python')
+        for value in ('unknown', None, True):
+            broken = state()
+            broken['scan_coverage']['python']['detectors']['smells']['status'] = value
+            with self.subTest(status=value), self.assertRaises(ValueError):
+                r.detector_coverage(broken, 'python')
+
     def test_snapshot_uses_exact_blobs_despite_export_attributes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

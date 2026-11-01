@@ -324,8 +324,15 @@ def objective_score(status):
 
 def detector_coverage(state, language):
     record = state.get('scan_coverage', {}).get(language)
-    require(isinstance(record, dict) and record.get('status') in {'full', 'reduced'} and isinstance(record.get('detectors'), dict), 'missing detector coverage')
-    return {k: (v.get('status'), v.get('confidence')) for k, v in record['detectors'].items()}
+    require(isinstance(record, dict) and record.get('status') in ('full', 'reduced') and isinstance(record.get('detectors'), dict), 'missing detector coverage')
+    result = {}
+    for name, detector in record['detectors'].items():
+        require(isinstance(name, str) and bool(name) and isinstance(detector, dict), 'invalid detector coverage')
+        confidence = detector.get('confidence')
+        require(detector.get('status') in ('full', 'reduced') and type(confidence) in {int, float}
+                and math.isfinite(confidence) and 0 <= confidence <= 1, 'invalid detector coverage')
+        result[name] = (detector['status'], confidence)
+    return result
 
 
 def compare(base_status, base_state, head_status, head_state, touched, renames, language, *, source_roots=None):

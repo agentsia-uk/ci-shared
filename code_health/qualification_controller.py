@@ -19,6 +19,7 @@ REJECTION_REASONS = {
     'language-uncovered': 'supported source file is outside declared language areas: src/a.ts',
     'invalid-score': 'missing or invalid objective score',
     'invalid-coverage': 'detector coverage changed between scans; scores are not comparable',
+    'invalid-coverage-boolean': 'invalid detector coverage',
     'git-snapshot-escape': 'symlink escapes',
     'workflow-mutable': 'does not match workflowRef',
     'workflow-conditional': 'may not be conditional or advisory',
@@ -72,6 +73,8 @@ def qualification_cases():
     subjective = {**finding, 'work_item_kind': 'review_defect'}
     bad_coverage = _compare()
     bad_coverage['headState']['scan_coverage']['python']['detectors']['smells']['confidence'] = .5
+    boolean_coverage = _compare()
+    boolean_coverage['headState']['scan_coverage']['python']['detectors']['smells']['confidence'] = True
     return [
         ('config-valid', 'validate-config', {'config': valid}, 'returned'),
         ('config-traversal', 'validate-config', {'config': traversal}, 'rejected'),
@@ -97,6 +100,7 @@ def qualification_cases():
         ('subjective-not-gated', 'compare', _compare(after=[subjective]), _expected_comparison()),
         ('invalid-score', 'compare', _compare(score_after=True), 'rejected'),
         ('invalid-coverage', 'compare', bad_coverage, 'rejected'),
+        ('invalid-coverage-boolean', 'compare', boolean_coverage, 'rejected'),
         ('git-snapshot-exact', 'git-snapshot', {'escape': False},
          {'source': 'def handle(value):\n    return eval(value)\n', 'substitution': 'COMMIT = "$Format:%H$"\n',
           'executable': 0o755, 'internalIsLink': True, 'internalContent': 'def handle(value):\n    return eval(value)\n'}),
