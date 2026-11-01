@@ -2,12 +2,16 @@ import hashlib
 import io
 import json
 import tempfile
+import threading
 import unittest
 import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
 from code_health.release_publish import BOT_ID, publish
+import code_health.release_publish as release_publish
 
 COMMIT = 'a' * 40
 TAG = 'code-health-' + COMMIT
@@ -99,7 +103,7 @@ class ReleasePublishTests(unittest.TestCase):
         with patch.dict('os.environ', {'GH_TOKEN': 'test-token', 'RELEASE_ADMIN_READ_TOKEN': 'read-token',
                                       'CODE_HEALTH_TAG_RULESET_ID': '123'}), \
              patch('code_health.release_publish.ensure_gh_version'), \
-             patch('code_health.release_publish.urllib.request.urlopen', side_effect=get), \
+             patch('code_health.release_publish.open_api', side_effect=get), \
              patch('code_health.release_publish.read_command', side_effect=command):
             publish(self.asset, COMMIT)
 
@@ -219,3 +223,43 @@ class ReleasePublishTests(unittest.TestCase):
             self.call()
         self.assertEqual(self.mutations, ['upload'])
         self.assertTrue(self.release['draft'])
+
+    def test_authenticated_requests_do_not_follow_redirects(self):
+        received = []
+
+        class Destination(BaseHTTPRequestHandler):
+            def do_GET(self):
+                received.append(self.headers.get('Authorization'))
+                self.send_response(200)
+                self.end_headers()
+            def log_message(self, *_args):
+                pass
+
+        destination = ThreadingHTTPServer(('127.0.0.1', 0), Destination)
+
+        class Redirect(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header('Location', f'http://127.0.0.1:{destination.server_port}/capture')
+                self.end_headers()
+            def log_message(self, *_args):
+                pass
+
+        origin = ThreadingHTTPServer(('127.0.0.1', 0), Redirect)
+        threads = [threading.Thread(target=server.serve_forever, daemon=True) for server in (origin, destination)]
+        for thread in threads:
+            thread.start()
+        try:
+            request = urllib.request.Request(f'http://127.0.0.1:{origin.server_port}/',
+                                             headers={'Authorization': 'Bearer synthetic-test-token'})
+            opener = getattr(release_publish, 'open_api', urllib.request.urlopen)
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                opener(request, timeout=3)
+            self.assertEqual(error.exception.code, 302)
+            self.assertEqual(received, [])
+        finally:
+            for server in (origin, destination):
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join(timeout=3)

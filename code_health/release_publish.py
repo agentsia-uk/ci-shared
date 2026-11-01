@@ -13,6 +13,15 @@ from .release_bundle import MAX_BUNDLE_BYTES
 BOT_ID = 41898282
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def open_api(request, *, timeout):
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect()).open(request, timeout=timeout)
+
+
 def publish(asset: Path, policy_commit: str) -> None:
     if not SHA.fullmatch(policy_commit) or asset.name != 'policy-bundle.tar':
         raise ValueError('invalid release commit or asset name')
@@ -43,7 +52,7 @@ def publish(asset: Path, policy_commit: str) -> None:
             data=upload if upload is not None else json.dumps(body).encode() if body is not None else None,
             method=request_method)
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with open_api(request, timeout=30) as response:
                 raw = response.read(4 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
             if error.code == 404 and request_method == 'GET':
