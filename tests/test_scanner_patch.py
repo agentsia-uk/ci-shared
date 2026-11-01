@@ -20,6 +20,7 @@ class ScannerPatchTests(unittest.TestCase):
         self.assertEqual('src/db/health.ts', mapping('src/db/__tests__/health.test.ts', production))
         self.assertIsNone(mapping('unrelated/__tests__/health.test.ts', production))
         self.assertEqual('src/db/health.ts', mapping('unrelated/__tests__/health.test.ts', {'src/db/health.ts'}))
+        self.assertIsNone(mapping('src/db/__tests__/health.test.ts', {'src/db/health.ts', 'src/db/health.tsx'}))
 
     def test_install_is_idempotent_and_refuses_unknown_source(self):
         original = scanner_patch.scanner_source().read_bytes()

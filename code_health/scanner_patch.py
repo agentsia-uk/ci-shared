@@ -7,7 +7,7 @@ import tempfile
 
 ORIGINAL_SHA256 = 'ab59a286ef8165fb8c812d894c1e1db6a6facca547a4a32e96eb20a5cfb3cd1f'
 PATCH_ID = 'typescript-test-mapping-v1'
-PATCHED_SHA256 = '260273df6e3df58d8caf9e1abb67fb864f757fc85fed8357ef0e754d2da2d6f9'
+PATCHED_SHA256 = 'c3cc9f3d130093b6e9a289c67893e25fbcef44a3091bdd7bf081069dbee0d28f'
 OLD = '''    for prod in production_set:
         prod_base = os.path.basename(prod)
         for c in candidates:
@@ -20,9 +20,9 @@ OLD = '''    for prod in production_set:
 
     return None
 '''
-NEW = '''    for c in candidates:
-        if c in production_set:
-            return c
+NEW = '''    exact = {c for c in candidates if c in production_set}
+    if exact:
+        return next(iter(exact)) if len(exact) == 1 else None
 
     basenames = {os.path.basename(c) for c in candidates}
     matches = {prod for prod in production_set if os.path.basename(prod) in basenames}
