@@ -1,7 +1,9 @@
+import ast
 import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from code_health import scanner_patch
@@ -15,6 +17,27 @@ def original_typescript():
 
 
 class ScannerPatchTests(unittest.TestCase):
+    def test_dynamic_writes_make_phantom_read_uncertain(self):
+        from desloppify.languages.python.detectors.dict_keys import (
+            TrackedDict, _CONFIG_NAMES, _is_singular_plural, _levenshtein,
+        )
+        source = scanner_patch.patched_component(
+            'python_dict_helpers', scanner_patch.scanner_source('python_dict_helpers').read_bytes())
+        module = ast.parse(source)
+        function = next(node for node in module.body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'analyze_scope_issues')
+        namespace = {'TrackedDict': TrackedDict, '_CONFIG_NAMES': _CONFIG_NAMES,
+                     '_is_singular_plural': _is_singular_plural, '_levenshtein': _levenshtein}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), '<patched dict-key analysis>', 'exec'), namespace)
+        tracked = TrackedDict('files', 1, True)
+        tracked.reads['policy.json'].append(2)
+        tracked.has_dynamic_write = True
+        visitor = SimpleNamespace(filepath='sample.py')
+        self.assertEqual([], namespace['analyze_scope_issues'](visitor, {'files': tracked}, 'build'))
+        tracked.has_dynamic_write = False
+        self.assertEqual(['phantom_read'], [issue['kind'] for issue in
+                         namespace['analyze_scope_issues'](visitor, {'files': tracked}, 'build')])
+
     def test_python_nesting_counts_blocks_not_continuation_alignment(self):
         source = scanner_patch.scanner_source('python_complexity').read_bytes()
         if hashlib.sha256(source).hexdigest() != scanner_patch.COMPONENTS['python_complexity']['patched']:
