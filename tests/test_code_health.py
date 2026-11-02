@@ -384,21 +384,29 @@ class RatchetTests(unittest.TestCase):
             git('add', '.')
             git('commit', '-qm', 'before')
             base = git('rev-parse', 'HEAD')
-            (repo / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
+            marker = 'SYNTHETIC-RAW-SOURCE-MUST-NOT-SHIP'
+            (repo / 'service.py').write_text('def handle(value):\n    return eval(value)  # ' + marker + '\n')
             git('add', '.')
             git('commit', '-qm', 'after')
             head = git('rev-parse', 'HEAD')
             output = root / 'result'
-            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head, '--scanner-image', os.environ['CODE_HEALTH_TEST_IMAGE'], '--reader-directory', os.environ['CODE_HEALTH_TEST_READERS']]
+            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head, '--scanner-image', os.environ['CODE_HEALTH_TEST_IMAGE'], '--reader-directory', os.environ['CODE_HEALTH_TEST_READERS'], '--projection-repository-id', '123']
             with patch.object(r.sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(1, r.main())
             report = json.loads((output / 'result.json').read_text())
-            self.assertEqual({'result.json'}, {path.name for path in output.iterdir()})
+            self.assertEqual({'result.json', 'projections'}, {path.name for path in output.iterdir()})
             self.assertEqual(base, report['base'])
             self.assertEqual(head, report['head'])
             self.assertTrue(report['areas'][0]['errors'])
             self.assertNotIn('eval(', json.dumps(report))
             self.assertEqual(r.POLICY['desloppifyVersion'], report['desloppifyVersion'])
+            projection = json.loads((output / 'projections/app-python.json').read_text())
+            self.assertEqual(123, projection['repositoryId'])
+            self.assertEqual(head, projection['commitSha'])
+            self.assertEqual(report['areas'][0]['objectiveAfter'], projection['scores']['objective'])
+            self.assertTrue(any(finding['detector'] == 'security' for finding in projection['findings']))
+            self.assertNotIn(marker, json.dumps(projection))
+            self.assertFalse(any(output.rglob('state.json')))
 
     @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_new_area_has_no_fabricated_baseline_score(self):

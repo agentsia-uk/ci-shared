@@ -37,14 +37,21 @@ jobs:
           import json, os, re
           from pathlib import Path
           event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-          if 'pull_request' in event:
+          event_name = os.environ['GITHUB_EVENT_NAME']
+          if event_name == 'pull_request' and 'pull_request' in event:
               base = event['pull_request']['base']['sha']
               head = os.environ['CANDIDATE_SHA']
-          elif 'merge_group' in event:
+          elif event_name == 'merge_group' and 'merge_group' in event:
               base = event['merge_group']['base_sha']
               head = event['merge_group']['head_sha']
+          elif (event_name == 'push' and event.get('deleted') is False and
+                isinstance(event.get('repository'), dict) and
+                isinstance(event['repository'].get('default_branch'), str) and
+                event.get('ref') == 'refs/heads/' + event['repository']['default_branch'] and
+                event.get('after') == os.environ['CANDIDATE_SHA']):
+              base = head = os.environ['CANDIDATE_SHA']
           else:
-              raise SystemExit('Code health requires a pull_request or merge_group event')
+              raise SystemExit('Code health requires a pull request, merge group or default-branch push')
           if not all(re.fullmatch('[0-9a-f]{40}', sha) for sha in [base, head]):
               raise SystemExit('Invalid comparison commit SHA')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:

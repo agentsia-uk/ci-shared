@@ -11,7 +11,7 @@ inputs:
     description: Exact candidate commit SHA.
     required: true
   output-path:
-    description: Private scan work directory. Only result.json is safe to publish.
+    description: Private scan work directory. Raw scan state must never be published.
     required: true
 runs:
   using: composite
@@ -56,6 +56,7 @@ runs:
         EXECUTING_ACTION_REPOSITORY: ${{ github.action_repository }}
         EXECUTING_ACTION_REF: ${{ github.action_ref }}
         CALLER_REPOSITORY: ${{ github.repository }}
+        CALLER_REPOSITORY_ID: ${{ github.repository_id }}
         CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         CODE_HEALTH_GITHUB_TOKEN: ${{ github.token }}
@@ -67,7 +68,7 @@ runs:
           --repository "${CALLER_REPOSITORY}" --action-repository "${EXECUTING_ACTION_REPOSITORY}" \
           --action-ref "${EXECUTING_ACTION_REF}" --caller-ref "${CALLER_WORKFLOW_REF}" \
           --caller-sha "${CALLER_WORKFLOW_SHA}" --scanner-image "${CODE_HEALTH_SCANNER_IMAGE:?}" \
-          --reader-directory "${CODE_HEALTH_READERS:?}"
+          --reader-directory "${CODE_HEALTH_READERS:?}" --projection-repository-id "${CALLER_REPOSITORY_ID}"
     - name: Clean private scanner workspace
       if: always()
       shell: bash

@@ -1,10 +1,11 @@
-import ast
 import hashlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import ast
 
 from code_health import scanner_patch
 
@@ -17,6 +18,22 @@ def original_typescript():
 
 
 class ScannerPatchTests(unittest.TestCase):
+    def test_batch_review_contract_uses_the_selected_language(self):
+        source = scanner_patch.scanner_source('review_orchestrator').read_bytes()
+        if scanner_patch.component_digest(source) != scanner_patch.COMPONENTS['review_orchestrator']['patched']:
+            source = scanner_patch.patched_component('review_orchestrator', source)
+        module = ast.parse(source)
+        function = next(node for node in module.body
+                        if isinstance(node, ast.FunctionDef) and node.name == '_build_prepared_packet_contract')
+        namespace = {
+            'prepared_packet_contract': lambda context, **kwargs: kwargs,
+            'resolve_review_packet_context': lambda args: args,
+        }
+        exec(compile(ast.Module(body=[function], type_ignores=[]), '<review packet orchestrator>', 'exec'), namespace)
+        result = namespace['_build_prepared_packet_contract'](
+            'review context', config={}, lang=SimpleNamespace(name='typescript'))
+        self.assertEqual('typescript', result['language'])
+
     def test_dynamic_writes_make_phantom_read_uncertain(self):
         from desloppify.languages.python.detectors.dict_keys import (
             TrackedDict, _CONFIG_NAMES, _is_singular_plural, _levenshtein,
@@ -38,6 +55,27 @@ class ScannerPatchTests(unittest.TestCase):
         tracked.has_dynamic_write = False
         self.assertEqual(['phantom_read'], [issue['kind'] for issue in
                          namespace['analyze_scope_issues'](visitor, {'files': tracked}, 'build')])
+
+    def test_review_source_identity_binds_a_clean_commit_to_its_scan_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            area = root / 'sdk'
+            area.mkdir()
+            (area / 'module.py').write_text('value = 1\n')
+            subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root, check=True)
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                            'commit', '-q', '-m', 'fixture'], cwd=root, check=True)
+            commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, check=True,
+                                    capture_output=True, text=True).stdout.strip()
+            self.assertEqual({'commit_sha': commit, 'path': str(area.resolve()), 'language': 'python'},
+                             scanner_patch.review_source_identity(area, 'python'))
+            (root / '.desloppify').mkdir()
+            (root / '.desloppify' / 'review.json').write_text('{}')
+            self.assertEqual({'commit_sha': commit, 'path': str(area.resolve()), 'language': 'python'},
+                             scanner_patch.review_source_identity(area, 'python'))
+            (area / 'untracked.py').write_text('value = 2\n')
+            self.assertIsNone(scanner_patch.review_source_identity(area, 'python'))
 
     def test_python_nesting_counts_blocks_not_continuation_alignment(self):
         source = scanner_patch.scanner_source('python_complexity').read_bytes()

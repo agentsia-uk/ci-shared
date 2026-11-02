@@ -8,8 +8,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from code_health import prepare_readers, scanner_container, scanner_recovery
-from code_health.cli import mechanical_findings, scan
+from code_health import mechanical, prepare_readers, scanner_container, scanner_recovery
+from code_health.cli import POLICY, mechanical_findings, scan
+
 
 IMAGE = os.environ.get('CODE_HEALTH_SCANNER_IMAGE')
 
@@ -68,9 +69,10 @@ class ScannerContainerTests(unittest.TestCase):
             readers.mkdir(mode=0o700)
             with patch.object(sys, 'argv', ['prepare-readers', '--destination', str(readers)]):
                 prepare_readers.main()
+            evidence = 'SYNTHETIC-RAW-SOURCE-MUST-NOT-SHIP'
             (source / 'sample.py').write_text('''\
-def answer():
-    return 42
+def answer(value):
+    return eval(value)  # SYNTHETIC-RAW-SOURCE-MUST-NOT-SHIP
 
 def dynamic_map(names):
     files = {}
@@ -99,11 +101,21 @@ def missing_literal_key():
             self.assertTrue((output / 'state.json').is_file())
             self.assertIsInstance(status, dict)
             self.assertIsInstance(state, dict)
+            actual_config = json.loads((source / '.desloppify/config.json').read_text())
+            self.assertIn(evidence, json.dumps(state))
+            projection = mechanical.project_mechanical(status, state, area, actual_config,
+                repository_id=123, commit_sha='a' * 40, tool_version=POLICY['desloppifyVersion'], scanner_patch=POLICY['scannerPatch'])
+            self.assertEqual(status['objective_score'], projection['scores']['objective'])
+            self.assertEqual(status['strict_score'], projection['scores']['strict'])
+            self.assertEqual(POLICY['scannerPatch'], projection['scannerPatch'])
+            self.assertNotIn(evidence, json.dumps(projection))
+            self.assertTrue(any(finding['detector'] == 'security' for finding in projection['findings']))
             phantom_reads = [finding for finding in mechanical_findings(state)
                              if finding['detector'] == 'dict_keys' and 'phantom_read' in finding['id']]
             self.assertEqual(1, len(phantom_reads))
             self.assertEqual('sample.py', phantom_reads[0]['file'])
             self.assertIn('policy.json', phantom_reads[0]['id'])
+
 
 
 if __name__ == '__main__':

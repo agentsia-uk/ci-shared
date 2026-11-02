@@ -135,7 +135,7 @@ def qualification_cases():
         ('workflow-conditional', 'workflow-pin', {'mode': 'conditional'}, 'rejected'),
         ('workflow-filtered', 'workflow-pin', {'mode': 'filtered'}, 'rejected'),
         ('scanner-mapping', 'scanner-mapping', {},
-         {'namespaceImport': True, 'patchSha256': '7bab0ae5c1f31fe909a672a53483c26463e5115a730853c34bc9ecef4c0c8f24',
+         {'namespaceImport': True, 'patchSha256': 'a20c2b0d9c669c2abd595deff3c2f96808ac846a83b6ea79e97e89fe7b9fba2a',
           'shallowNesting': None, 'deepNesting': [5, 'nesting depth 5'],
           'exact': 'src/db/health.ts', 'ambiguousName': None, 'ambiguousExact': None,
           'pythonNames': ['code_health', 'code_health.cli', 'code_health.qualification_bridge'],
