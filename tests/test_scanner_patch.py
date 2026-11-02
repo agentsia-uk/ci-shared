@@ -1,4 +1,5 @@
 import hashlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,27 @@ def original_typescript():
 
 
 class ScannerPatchTests(unittest.TestCase):
+    def test_review_source_identity_binds_a_clean_commit_to_its_scan_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            area = root / 'sdk'
+            area.mkdir()
+            (area / 'module.py').write_text('value = 1\n')
+            subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=root, check=True)
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True)
+            subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                            'commit', '-q', '-m', 'fixture'], cwd=root, check=True)
+            commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, check=True,
+                                    capture_output=True, text=True).stdout.strip()
+            self.assertEqual({'commit_sha': commit, 'path': str(area.resolve()), 'language': 'python'},
+                             scanner_patch.review_source_identity(area, 'python'))
+            (root / '.desloppify').mkdir()
+            (root / '.desloppify' / 'review.json').write_text('{}')
+            self.assertEqual({'commit_sha': commit, 'path': str(area.resolve()), 'language': 'python'},
+                             scanner_patch.review_source_identity(area, 'python'))
+            (area / 'untracked.py').write_text('value = 2\n')
+            self.assertIsNone(scanner_patch.review_source_identity(area, 'python'))
+
     def test_python_nesting_counts_blocks_not_continuation_alignment(self):
         source = scanner_patch.scanner_source('python_complexity').read_bytes()
         if hashlib.sha256(source).hexdigest() != scanner_patch.COMPONENTS['python_complexity']['patched']:

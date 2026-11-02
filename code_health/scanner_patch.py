@@ -3,10 +3,12 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 
-PATCH_ID = 'coverage-python-graph-and-nesting-v4'
-PATCHED_SHA256 = '4169b5f0443241ad75c1e6c2122bcc5773ee2b74517d1e410cc8240b600af7f1'
+PATCH_ID = 'coverage-python-graph-nesting-and-review-source-v5'
+PATCHED_SHA256 = '5054bba11d0dd2b60d65f5753d4ff15568bac48031b28dc8ab94ba353258369d'
 COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_coverage',
                 'original': 'ab59a286ef8165fb8c812d894c1e1db6a6facca547a4a32e96eb20a5cfb3cd1f',
                 'patched': 'c3cc9f3d130093b6e9a289c67893e25fbcef44a3091bdd7bf081069dbee0d28f'},
@@ -21,7 +23,10 @@ COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_cov
                        'patched': '78e5ce91d408515c627b5b09fe8105cf89140bff52a49ae80d0b9cedf2925d21'},
  'mapping': {'module': 'desloppify.engine.detectors.coverage.mapping_imports',
              'original': '625065243f813401187bb7c507753b328fe6f657c7f1faf995fcaafe224e015f',
-             'patched': 'e89a7267a8e6e29072e8bc3b7655822a0efdcc8e9442921af2f87060c6b459fe'}}
+             'patched': 'e89a7267a8e6e29072e8bc3b7655822a0efdcc8e9442921af2f87060c6b459fe'},
+ 'review_packet': {'module': 'desloppify.app.commands.review.packet.build',
+                   'original': '74676d8bf41864c0eefe9c513097139ef6af8e8bc07686f58405aeac586e8a91',
+                   'patched': 'ebfcdeaf4931f0090a5c687c485a1f005653a29fd352832e5b17d9e25f39df4e'}}
 OLD = '''    for prod in production_set:
         prod_base = os.path.basename(prod)
         for c in candidates:
@@ -117,8 +122,90 @@ PY_NESTING = '''def compute_nesting_depth(content: str, lines: list[str]) -> tup
 
 '''
 
+REVIEW_PACKET_OLD = '''    return {
+        "path": str(context.path.resolve()),
+        "state_path": str(context.state_path.resolve()) if context.state_path is not None else None,
+        "dimensions": sorted(context.dimensions or []),
+        "retrospective": context.retrospective,
+        "retrospective_max_issues": context.retrospective_max_issues,
+        "retrospective_max_batch_items": context.retrospective_max_batch_items,
+        "config_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+    }
+'''
+REVIEW_PACKET_NEW = '''    from code_health.scanner_patch import review_source_identity
+    return {
+        "path": str(context.path.resolve()),
+        "source": review_source_identity(context.path, language),
+        "state_path": str(context.state_path.resolve()) if context.state_path is not None else None,
+        "dimensions": sorted(context.dimensions or []),
+        "retrospective": context.retrospective,
+        "retrospective_max_issues": context.retrospective_max_issues,
+        "retrospective_max_batch_items": context.retrospective_max_batch_items,
+        "config_hash": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+    }
+'''
+REVIEW_PACKET_SIGNATURE_OLD = '''def prepared_packet_contract(
+    context: ReviewPacketContext,
+    *,
+    config: dict[str, Any] | None,
+) -> dict[str, object]:
+'''
+REVIEW_PACKET_SIGNATURE_NEW = '''def prepared_packet_contract(
+    context: ReviewPacketContext,
+    *,
+    config: dict[str, Any] | None,
+    language: str,
+) -> dict[str, object]:
+'''
+REVIEW_PACKET_LANGUAGE_CALL_OLD = '    packet, _lang_name = build_holistic_packet(\n'
+REVIEW_PACKET_LANGUAGE_CALL_NEW = '    packet, lang_name = build_holistic_packet(\n'
+REVIEW_PACKET_CONTRACT_CALL_OLD = '''    packet["prepared_packet_contract"] = prepared_packet_contract(
+        context,
+        config=config,
+    )
+'''
+REVIEW_PACKET_CONTRACT_CALL_NEW = '''    packet["prepared_packet_contract"] = prepared_packet_contract(
+        context,
+        config=config,
+        language=lang_name,
+    )
+'''
+
 def component_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def review_source_identity(path: Path, language: str) -> dict[str, str] | None:
+    if not language:
+        return None
+    try:
+        target = path.resolve()
+    except (OSError, RuntimeError):
+        return None
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env.update({'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_OPTIONAL_LOCKS': '0'})
+
+    def git(args, cwd):
+        return subprocess.run(
+            ['git', '-c', 'core.fsmonitor=false', *args], cwd=cwd, env=env,
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+
+    try:
+        top = git(['rev-parse', '--show-toplevel'], target)
+        if top.returncode:
+            return None
+        root = Path(top.stdout.strip()).resolve()
+        target.relative_to(root)
+        head = git(['rev-parse', '--verify', 'HEAD'], root)
+        status = git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none', '--', '.',
+                      ':(exclude).desloppify', ':(exclude)**/.desloppify/**'], root)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    commit = head.stdout.strip()
+    if head.returncode or status.returncode or status.stdout or not re.fullmatch(r'[0-9a-f]{40}', commit):
+        return None
+    return {'commit_sha': commit, 'path': str(target), 'language': language}
 
 
 def patched_component(component: str, original: bytes) -> bytes:
@@ -152,6 +239,15 @@ def patched_component(component: str, original: bytes) -> bytes:
         if source.count(old) != 1:
             raise ValueError('scanner mapping patch target is missing or ambiguous')
         source = source.replace(old, new, 1)
+    elif component == 'review_packet':
+        targets = ((REVIEW_PACKET_SIGNATURE_OLD, REVIEW_PACKET_SIGNATURE_NEW),
+                   (REVIEW_PACKET_OLD, REVIEW_PACKET_NEW),
+                   (REVIEW_PACKET_LANGUAGE_CALL_OLD, REVIEW_PACKET_LANGUAGE_CALL_NEW),
+                   (REVIEW_PACKET_CONTRACT_CALL_OLD, REVIEW_PACKET_CONTRACT_CALL_NEW))
+        if any(source.count(old) != 1 for old, _ in targets):
+            raise ValueError('scanner review-packet patch target is missing or ambiguous')
+        for old, new in targets:
+            source = source.replace(old, new, 1)
     else:
         raise ValueError('unknown scanner component')
     data = source.encode('utf-8')
