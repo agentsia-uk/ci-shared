@@ -21,8 +21,9 @@ class ScannerPatchTests(unittest.TestCase):
         from desloppify.languages.python.detectors.dict_keys import (
             TrackedDict, _CONFIG_NAMES, _is_singular_plural, _levenshtein,
         )
-        source = scanner_patch.patched_component(
-            'python_dict_helpers', scanner_patch.scanner_source('python_dict_helpers').read_bytes())
+        source = scanner_patch.scanner_source('python_dict_helpers').read_bytes()
+        if scanner_patch.component_digest(source) != scanner_patch.COMPONENTS['python_dict_helpers']['patched']:
+            source = scanner_patch.patched_component('python_dict_helpers', source)
         module = ast.parse(source)
         function = next(node for node in module.body
                         if isinstance(node, ast.FunctionDef) and node.name == 'analyze_scope_issues')
