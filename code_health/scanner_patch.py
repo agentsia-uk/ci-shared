@@ -4,7 +4,8 @@ import importlib.util
 import os
 from pathlib import Path
 import re
-import subprocess
+# Git metadata is read with fixed arguments, without a shell.
+import subprocess  # nosec B404
 import tempfile
 
 PATCH_ID = 'coverage-python-graph-nesting-and-review-source-v5'
@@ -171,6 +172,20 @@ REVIEW_PACKET_CONTRACT_CALL_NEW = '''    packet["prepared_packet_contract"] = pr
     )
 '''
 
+
+def patch_review_packet_source(source: str) -> str:
+    targets = (
+        (REVIEW_PACKET_SIGNATURE_OLD, REVIEW_PACKET_SIGNATURE_NEW),
+        (REVIEW_PACKET_OLD, REVIEW_PACKET_NEW),
+        (REVIEW_PACKET_LANGUAGE_CALL_OLD, REVIEW_PACKET_LANGUAGE_CALL_NEW),
+        (REVIEW_PACKET_CONTRACT_CALL_OLD, REVIEW_PACKET_CONTRACT_CALL_NEW),
+    )
+    if any(source.count(old) != 1 for old, _ in targets):
+        raise ValueError('scanner review-packet patch target is missing or ambiguous')
+    for old, new in targets:
+        source = source.replace(old, new, 1)
+    return source
+
 def component_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -186,8 +201,9 @@ def review_source_identity(path: Path, language: str) -> dict[str, str] | None:
     env.update({'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_OPTIONAL_LOCKS': '0'})
 
     def git(args, cwd):
-        return subprocess.run(
-            ['git', '-c', 'core.fsmonitor=false', *args], cwd=cwd, env=env,
+        # The repository path controls only cwd; command arguments are fixed.
+        return subprocess.run(  # nosec B603
+            ['/usr/bin/git', '-c', 'core.fsmonitor=false', *args], cwd=cwd, env=env,
             capture_output=True, text=True, timeout=5, check=False,
         )
 
@@ -240,14 +256,7 @@ def patched_component(component: str, original: bytes) -> bytes:
             raise ValueError('scanner mapping patch target is missing or ambiguous')
         source = source.replace(old, new, 1)
     elif component == 'review_packet':
-        targets = ((REVIEW_PACKET_SIGNATURE_OLD, REVIEW_PACKET_SIGNATURE_NEW),
-                   (REVIEW_PACKET_OLD, REVIEW_PACKET_NEW),
-                   (REVIEW_PACKET_LANGUAGE_CALL_OLD, REVIEW_PACKET_LANGUAGE_CALL_NEW),
-                   (REVIEW_PACKET_CONTRACT_CALL_OLD, REVIEW_PACKET_CONTRACT_CALL_NEW))
-        if any(source.count(old) != 1 for old, _ in targets):
-            raise ValueError('scanner review-packet patch target is missing or ambiguous')
-        for old, new in targets:
-            source = source.replace(old, new, 1)
+        source = patch_review_packet_source(source)
     else:
         raise ValueError('unknown scanner component')
     data = source.encode('utf-8')
