@@ -8,8 +8,8 @@ import re
 import subprocess  # nosec B404
 import tempfile
 
-PATCH_ID = 'coverage-python-graph-nesting-dynamic-dicts-and-review-source-v6'
-PATCHED_SHA256 = '489a4bcf486d2fcaefb1878df53ed2c64bc6469e256d58132950197bcd17f134'
+PATCH_ID = 'coverage-python-graph-nesting-dynamic-dicts-and-review-source-v7'
+PATCHED_SHA256 = 'a20c2b0d9c669c2abd595deff3c2f96808ac846a83b6ea79e97e89fe7b9fba2a'
 COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_coverage',
                 'original': 'ab59a286ef8165fb8c812d894c1e1db6a6facca547a4a32e96eb20a5cfb3cd1f',
                 'patched': 'c3cc9f3d130093b6e9a289c67893e25fbcef44a3091bdd7bf081069dbee0d28f'},
@@ -36,7 +36,10 @@ COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_cov
                          'patched': 'b1ca8a0c0abee453fad47fa18ef7f139cec4889d1165fd7b6596d7ed5e0706f1'},
  'python_dict_helpers': {'module': 'desloppify.languages.python.detectors.dict_keys.visitor_helpers',
                          'original': '363ec1ee3311af9718d4120a098b9905cfb0cfcc215e4f1584ef3ff529799910',
-                         'patched': 'f289d2a0aa893d30b998aa6b44e1bfefc908d654ccbf0edbfc53e6de64d3743a'}}
+                         'patched': 'f289d2a0aa893d30b998aa6b44e1bfefc908d654ccbf0edbfc53e6de64d3743a'},
+ 'review_orchestrator': {'module': 'desloppify.app.commands.review.batch.orchestrator',
+                         'original': '2c66d156c21a41156ef7909c01feb81db6de86390a31096196d86a1921705161',
+                         'patched': 'f461a9dcb18a89021080b24ef83fdd4ab1d3c2998d251595d6b5b6262ff05e08'}}
 OLD = '''    for prod in production_set:
         prod_base = os.path.basename(prod)
         for c in candidates:
@@ -195,6 +198,23 @@ def patch_review_packet_source(source: str) -> str:
         source = source.replace(old, new, 1)
     return source
 
+
+def patch_review_orchestrator_source(source: str) -> str:
+    old_helper = '''def _build_prepared_packet_contract(args, *, config: dict | None) -> dict[str, object]:
+    """Build normalized invocation contract for prepared packet reuse."""
+    return prepared_packet_contract(resolve_review_packet_context(args), config=config)
+'''
+    new_helper = '''def _build_prepared_packet_contract(args, *, config: dict | None, lang) -> dict[str, object]:
+    """Build normalized invocation contract for prepared packet reuse."""
+    language = getattr(lang, "name", None) or str(getattr(lang, "lang", ""))
+    return prepared_packet_contract(resolve_review_packet_context(args), config=config, language=language)
+'''
+    old_call = '_build_prepared_packet_contract(args, config=config)'
+    new_call = '_build_prepared_packet_contract(args, config=config, lang=lang)'
+    if source.count(old_helper) != 1 or source.count(old_call) != 1:
+        raise ValueError('scanner review-orchestrator patch target is missing or ambiguous')
+    return source.replace(old_helper, new_helper, 1).replace(old_call, new_call, 1)
+
 def component_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -309,6 +329,7 @@ PATCHERS = {
     'python_dict_shared': _patch_python_dict_shared,
     'python_dict_visitor': _patch_python_dict_visitor,
     'python_dict_helpers': _patch_python_dict_helpers,
+    'review_orchestrator': patch_review_orchestrator_source,
 }
 
 

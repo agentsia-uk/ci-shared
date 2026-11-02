@@ -18,6 +18,22 @@ def original_typescript():
 
 
 class ScannerPatchTests(unittest.TestCase):
+    def test_batch_review_contract_uses_the_selected_language(self):
+        source = scanner_patch.scanner_source('review_orchestrator').read_bytes()
+        if scanner_patch.component_digest(source) != scanner_patch.COMPONENTS['review_orchestrator']['patched']:
+            source = scanner_patch.patched_component('review_orchestrator', source)
+        module = ast.parse(source)
+        function = next(node for node in module.body
+                        if isinstance(node, ast.FunctionDef) and node.name == '_build_prepared_packet_contract')
+        namespace = {
+            'prepared_packet_contract': lambda context, **kwargs: kwargs,
+            'resolve_review_packet_context': lambda args: args,
+        }
+        exec(compile(ast.Module(body=[function], type_ignores=[]), '<review packet orchestrator>', 'exec'), namespace)
+        result = namespace['_build_prepared_packet_contract'](
+            'review context', config={}, lang=SimpleNamespace(name='typescript'))
+        self.assertEqual('typescript', result['language'])
+
     def test_dynamic_writes_make_phantom_read_uncertain(self):
         from desloppify.languages.python.detectors.dict_keys import (
             TrackedDict, _CONFIG_NAMES, _is_singular_plural, _levenshtein,
