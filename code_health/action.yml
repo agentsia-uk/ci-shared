@@ -17,13 +17,34 @@ runs:
   using: composite
   steps:
     - name: Install the shared scanner pin
+      id: setup
       shell: bash
       env:
         POLICY_ROOT: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        version=$(python -c 'import json,os,pathlib; print(json.loads((pathlib.Path(os.environ["POLICY_ROOT"])/"policy.json").read_text())["desloppifyVersion"])')
-        python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
+        python3 -I -c 'import runpy,sys; root=sys.argv.pop(1); sys.path.insert(0,root); runpy.run_module("code_health.scanner_recovery",run_name="__main__")' "$(dirname "$POLICY_ROOT")" "${RUNNER_TEMP:?}"
+        task_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-task.XXXXXXXX")
+        task_id=$(stat -c '%d:%i' "$task_dir")
+        printf 'task_dir=%s\ntask_id=%s\n' "$task_dir" "$task_id" >> "$GITHUB_OUTPUT"
+        printf 'CODE_HEALTH_TASK_DIR=%s\nCODE_HEALTH_TASK_ID=%s\n' "$task_dir" "$task_id" >> "$GITHUB_ENV"
+        tool_dir="$task_dir/tool"
+        readers_dir="$task_dir/readers"
+        build_dir="$task_dir/build"
+        mkdir "$readers_dir" "$build_dir" "$task_dir/tmp"
+        chmod 700 "$readers_dir" "$build_dir" "$task_dir/tmp"
+        python -I -m venv "$tool_dir"
+        "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r "${POLICY_ROOT}/requirements.lock"
+        "$tool_dir/bin/python" -I "${POLICY_ROOT}/scanner_patch.py"
+        "$tool_dir/bin/python" -I -c 'import runpy,sys; root=sys.argv.pop(1); sys.path.insert(0,root); runpy.run_module("code_health.prepare_readers",run_name="__main__")' "$(dirname "$POLICY_ROOT")" --destination "$readers_dir"
+        mkdir "$build_dir/code_health"
+        cp "${POLICY_ROOT}/requirements.lock" "${POLICY_ROOT}/scanner_patch.py" "${POLICY_ROOT}/readers_lock.py" "${POLICY_ROOT}/scanner_entrypoint.py" "$build_dir/code_health/"
+        DOCKER_BUILDKIT=1 docker build --iidfile "$tool_dir/image-id" -f "${POLICY_ROOT}/scanner.Dockerfile" "$build_dir"
+        scanner_image=$(cat "$tool_dir/image-id")
+        [[ "$scanner_image" =~ ^sha256:[0-9a-f]{64}$ ]]
+        printf 'CODE_HEALTH_PYTHON=%s/bin/python\n' "$tool_dir" >> "$GITHUB_ENV"
+        printf 'CODE_HEALTH_READERS=%s\n' "$readers_dir" >> "$GITHUB_ENV"
+        printf 'CODE_HEALTH_SCANNER_IMAGE=%s\n' "$scanner_image" >> "$GITHUB_ENV"
     - name: Compare full scans
       shell: bash
       env:
@@ -38,10 +59,24 @@ runs:
         CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         CODE_HEALTH_GITHUB_TOKEN: ${{ github.token }}
+        TMPDIR: ${{ env.CODE_HEALTH_TASK_DIR }}/tmp
       run: |
         set -euo pipefail
-        python "${POLICY_ROOT}/cli.py" --repo "${REPOSITORY_PATH}" \
+        "${CODE_HEALTH_PYTHON:?}" -I -c 'import runpy,sys; root=sys.argv.pop(1); sys.path.insert(0,root); runpy.run_path(root+"/cli.py",run_name="__main__")' "${POLICY_ROOT}" --repo "${REPOSITORY_PATH}" \
           --base "${BASE_SHA}" --head "${HEAD_SHA}" --output "${OUTPUT_PATH}" \
           --repository "${CALLER_REPOSITORY}" --action-repository "${EXECUTING_ACTION_REPOSITORY}" \
           --action-ref "${EXECUTING_ACTION_REF}" --caller-ref "${CALLER_WORKFLOW_REF}" \
-          --caller-sha "${CALLER_WORKFLOW_SHA}"
+          --caller-sha "${CALLER_WORKFLOW_SHA}" --scanner-image "${CODE_HEALTH_SCANNER_IMAGE:?}" \
+          --reader-directory "${CODE_HEALTH_READERS:?}"
+    - name: Clean private scanner workspace
+      if: always()
+      shell: bash
+      env:
+        POLICY_ROOT: ${{ github.action_path }}
+        TASK_TO_CLEAN: ${{ steps.setup.outputs.task_dir }}
+        TASK_ID_TO_CLEAN: ${{ steps.setup.outputs.task_id }}
+      run: |
+        set -euo pipefail
+        if [[ -n "${TASK_TO_CLEAN:-}" && -n "${TASK_ID_TO_CLEAN:-}" ]]; then
+          python3 -I -c 'import runpy,sys; root=sys.argv.pop(1); sys.path.insert(0,root); runpy.run_module("code_health.scanner_recovery",run_name="__main__")' "$(dirname "$POLICY_ROOT")" "${RUNNER_TEMP:?}" "$TASK_TO_CLEAN" "$TASK_ID_TO_CLEAN"
+        fi

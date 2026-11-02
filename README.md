@@ -98,8 +98,13 @@ The reusable `shared-code-health.yml` workflow runs full base and candidate
 scans with the same pinned scanner. It refuses an objective-score decrease,
 new mechanical findings in touched files, and remaining T1/T2 findings in
 those files. A cross-file finding counts when any related file is touched.
-Git renames preserve the identity of inherited lower-priority findings.
-Changed detector coverage fails closed. A genuinely new project/language area
+Git renames preserve the identity of inherited lower-priority findings. For
+Python and TypeScript security findings, a changed line number preserves identity
+only when the uniquely identified surrounding code is byte-for-byte unchanged
+in both source snapshots. Python uses undecorated containing scopes or a top-level
+statement; TypeScript uses the complete top-level statement. Changed, ambiguous, inaccessible or unparseable source
+is treated as new; other detectors retain their native identity rules. High-priority
+findings in touched files still block. Changed detector coverage fails closed. A genuinely new project/language area
 records `objectiveBefore: null` and `baselineKind: new-area`; the candidate is
 scanned and its new touched findings still fail, without inventing a previous
 score. Existing reduced coverage is reported
@@ -183,9 +188,31 @@ changing only the manifest/workflows. Queued upgrades are independently
 matched to live PR metadata, exact ancestry and the pin carried by that PR.
 This release does not create those upgrade PRs or alter live required checks.
 
+The policy-release helpers build a deterministic bundle from exact committed
+Git blobs and validate its file index, dependency lock and policy version. The
+separate release verifier requires an immutable release and an attestation from
+the pinned qualification workflow. These helpers are not yet wired into a
+release workflow or required gate; their unit tests do not establish that a
+real attestation or a Linux installation has been qualified. The dependency
+lock targets Python 3.13 on Linux x86-64 or ARM64 with glibc 2.34 or newer.
+
+The reader lock pins the upstream manifest and platform archive hashes. The
+bundle builder requires both exact Linux reader archives and includes them with
+the metadata; it can download the public archives automatically with
+`--download-readers`. The bundle verifier checks their bytes against that lock. No
+release workflow has yet qualified or activated the bundled readers. The scanner
+still needs a read-only runtime and complete release qualification.
+Trusted scans run only on Linux; the planned macOS publisher will validate and
+publish their evidence without scanning.
+The draft action prepares the scanner container and verified readers; the
+reusable workflow still points to the earlier action and no qualified release
+has been activated.
+
 Run the verifier's tests with the pinned scanner installed:
 
 ```sh
-python -m pip install 'desloppify[full]==1.0'
-python -m unittest discover -s tests -v
+python -m venv .venv
+.venv/bin/python -m pip install --only-binary=:all: --require-hashes -r code_health/requirements.lock
+.venv/bin/python code_health/scanner_patch.py
+.venv/bin/python -m unittest discover -s tests -v
 ```

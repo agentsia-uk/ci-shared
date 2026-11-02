@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -20,9 +21,36 @@ import yaml
 
 from desloppify.languages import available_langs, get_lang
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from code_health import finding_identity, scanner_container, scanner_patch
+
 POLICY = json.loads(Path(__file__).with_name('policy.json').read_text())
 CONFIG = '.github/code-health.json'
+GIT_EXECUTABLE = '/usr/bin/git'
+MAX_CONFIG_BYTES = 1024 * 1024
 LANGUAGES = set(available_langs())
+MAX_UPGRADE_PAGE_BYTES = 16 * 1024 * 1024
+
+
+class _NoUpgradeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, 'upgrade metadata redirect refused', headers, fp)
+
+
+def open_upgrade_api(request, *, timeout):
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoUpgradeRedirect()).open(request, timeout=timeout)
+
+
+def read_upgrade_page(response):
+    data = response.read(MAX_UPGRADE_PAGE_BYTES + 1)
+    require(len(data) <= MAX_UPGRADE_PAGE_BYTES, 'upgrade PR metadata exceeds the page size limit')
+    try:
+        prs = json.loads(data)
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise ValueError('invalid upgrade PR metadata') from error
+    require(isinstance(prs, list) and len(prs) <= 100, 'invalid upgrade PR metadata')
+    return prs
 
 
 def require(condition, message):
@@ -38,9 +66,11 @@ def relative_path(value, *, pattern=False):
     require(isinstance(value, str) and value and '\\' not in value, 'expected a relative POSIX path')
     p = PurePosixPath(value)
     require(not p.is_absolute() and '..' not in p.parts, 'path escapes the repository')
+    require(p.as_posix() == value, 'path must use its canonical POSIX spelling')
     require(not any(ord(c) < 32 for c in value), 'control characters in path')
     if pattern:
-        require(value not in {'.', '*', '**', '**/*'}, 'an exclusion cannot hide the whole area')
+        universal = all('*' in part and set(part) <= {'*', '?'} and part.count('?') <= 1 for part in p.parts)
+        require(not universal, 'an exclusion cannot hide the whole area')
     else:
         require(not any(c in value for c in '*?['), 'area paths must be literal')
     return value
@@ -100,7 +130,7 @@ def validate_workflow_pin(repo, sha, workflow_path, workflow_ref):
     require(workflow_path.startswith('.github/workflows/') and workflow_path.endswith(('.yml', '.yaml')), 'caller workflow path is invalid')
     expected = f'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@{workflow_ref}'
     # BaseLoader preserves Actions scalars and cannot construct tagged Python objects.
-    workflow = yaml.load(run(['git', 'show', f'{sha}:{workflow_path}'], cwd=repo), Loader=yaml.BaseLoader)
+    workflow = yaml.load(git_blob(repo, sha, workflow_path, max_bytes=MAX_CONFIG_BYTES), Loader=yaml.BaseLoader)
     require(isinstance(workflow, dict) and isinstance(workflow.get('jobs'), dict), 'caller workflow has no jobs')
     found = False
     for job in workflow['jobs'].values():
@@ -151,7 +181,7 @@ def authorized_upgrade(event, repository, touched):
 def upgrade_evidence(event, args, touched):
     if authorized_upgrade(event, args.repository, touched):
         pr = event['pull_request']
-        pin = json.loads(run(['git', 'show', f"{pr['head']['sha']}:{CONFIG}"], cwd=args.repo)).get('policyRef')
+        pin = json.loads(git_blob(args.repo, pr['head']['sha'], CONFIG, max_bytes=MAX_CONFIG_BYTES)).get('policyRef')
         if pin == args.action_ref:
             return {'pullRequest': pr['number'], 'headSha': pr['head']['sha']}
     if 'merge_group' not in event:
@@ -162,21 +192,20 @@ def upgrade_evidence(event, args, touched):
     for page in range(1, 101):
         query = urllib.parse.urlencode({'state': 'open', 'base': branch, 'per_page': 100, 'page': page})
         request = urllib.request.Request(f'https://api.github.com/repos/{args.repository}/pulls?{query}', headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            prs = json.load(response)
-        require(isinstance(prs, list), 'invalid upgrade PR metadata')
+        with open_upgrade_api(request, timeout=30) as response:
+            prs = read_upgrade_page(response)
         for pr in prs:
             if not authorized_upgrade({'pull_request': pr}, args.repository, {CONFIG}):
                 continue
             sha = pr['head']['sha']
             require(re.fullmatch('[0-9a-f]{40}', sha), 'invalid upgrade head SHA')
-            contained = subprocess.run(['git', 'merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
-            require(contained.returncode in {0, 1, 128}, 'could not verify queued upgrade ancestry')
+            contained = git_process(['merge-base', '--is-ancestor', sha, args.head], cwd=args.repo, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            require(contained.returncode in {0, 1}, 'could not verify queued upgrade ancestry')
             if contained.returncode:
                 continue
             ancestor = run(['git', 'merge-base', pr['base']['sha'], sha], cwd=args.repo).decode().strip()
             paths, _ = changed_paths(args.repo, ancestor, sha)
-            pin = json.loads(run(['git', 'show', f'{sha}:{CONFIG}'], cwd=args.repo)).get('policyRef')
+            pin = json.loads(git_blob(args.repo, sha, CONFIG, max_bytes=MAX_CONFIG_BYTES)).get('policyRef')
             if pin == args.action_ref and authorized_upgrade({'pull_request': pr}, args.repository, paths):
                 return {'pullRequest': pr['number'], 'headSha': sha}
         if len(prs) < 100:
@@ -209,9 +238,39 @@ def validate_language_coverage(files, areas):
         require(covered, f'supported source file is outside declared language areas: {file}')
 
 
+def git_process(args, *, cwd, env=None, **kwargs):
+    # Preserve normal repository/global config (including safe.directory), but
+    # reject inherited overrides of the repository, object store or configuration.
+    source = os.environ if env is None else env
+    clean = {key: value for key, value in source.items() if not key.startswith('GIT_')}
+    clean['GIT_NO_REPLACE_OBJECTS'] = '1'
+    return subprocess.run([GIT_EXECUTABLE, *args], cwd=cwd, env=clean, timeout=1800, **kwargs)
+
+
 def run(args, *, cwd, env=None):
-    result = subprocess.run(args, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=1800)
+    require(isinstance(args, list) and args and args[0] == 'git', 'only Git commands are supported')
+    result = git_process(args[1:], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     return result.stdout
+
+
+def git_blob(repo, sha, path, *, max_bytes, optional=False):
+    relative_path(path)
+    require(re.fullmatch('[0-9a-f]{40}', sha), 'Git blob lookup requires an exact commit SHA')
+    tree = run(['git', 'ls-tree', '-z', '--full-tree', f'{sha}^{{commit}}', '--', path], cwd=repo)
+    if not tree:
+        require(optional, f'required Git blob is absent: {path}')
+        return None
+    entries = tree.split(b'\0')
+    require(len(entries) == 2 and entries[-1] == b'', 'invalid exact Git tree entry')
+    metadata, actual_path = entries[0].split(b'\t', 1)
+    mode, kind, oid = metadata.split()
+    require(actual_path == path.encode() and kind == b'blob' and mode in {b'100644', b'100755'} and re.fullmatch(b'[0-9a-f]{40}', oid), 'path must be an exact regular Git blob')
+    size = run(['git', 'cat-file', '-s', oid.decode()], cwd=repo).strip()
+    require(size.isdigit() and int(size) <= max_bytes, 'Git blob exceeds the size limit')
+    raw = run(['git', 'cat-file', 'blob', oid.decode()], cwd=repo)
+    require(len(raw) == int(size), 'Git blob read was incomplete')
+    return raw
+
 
 
 def changed_paths(repo, base, head):
@@ -267,11 +326,23 @@ def objective_score(status):
 
 def detector_coverage(state, language):
     record = state.get('scan_coverage', {}).get(language)
-    require(isinstance(record, dict) and record.get('status') in {'full', 'reduced'} and isinstance(record.get('detectors'), dict), 'missing detector coverage')
-    return {k: (v.get('status'), v.get('confidence')) for k, v in record['detectors'].items()}
+    require(isinstance(record, dict) and record.get('status') in ('full', 'reduced') and isinstance(record.get('detectors'), dict), 'missing detector coverage')
+    result = {}
+    for name, detector in record['detectors'].items():
+        require(isinstance(name, str) and bool(name) and isinstance(detector, dict), 'invalid detector coverage')
+        confidence = detector.get('confidence')
+        require(detector.get('status') in ('full', 'reduced') and type(confidence) in {int, float}
+                and math.isfinite(confidence) and 0 <= confidence <= 1, 'invalid detector coverage')
+        details = tuple(detector.get(field, '') for field in ('tool', 'reason', 'summary', 'impact'))
+        require(all(isinstance(value, str) for value in details), 'invalid detector coverage')
+        result[name] = (detector['status'], confidence, details if detector['status'] == 'reduced' else ())
+    return record['status'], result
 
 
-def compare(base_status, base_state, head_status, head_state, touched, renames, language):
+def compare(base_status, base_state, head_status, head_state, touched, renames, language, *, source_roots=None):
+    identities = finding_identity.FindingIdentity(*source_roots) if source_roots is not None else None
+    def key(finding, mapping, side):
+        return identities.fingerprint(finding, mapping, side) if identities is not None else fingerprint(finding, mapping)
     errors = []
     score_after = objective_score(head_status)
     coverage_after = detector_coverage(head_state, language)
@@ -280,14 +351,14 @@ def compare(base_status, base_state, head_status, head_state, touched, renames, 
     else:
         score_before = objective_score(base_status)
         require(detector_coverage(base_state, language) == coverage_after, 'detector coverage changed between scans; scores are not comparable')
-        before = Counter(fingerprint(f, renames) for f in mechanical_findings(base_state))
+        before = Counter(key(f, renames, 'base') for f in mechanical_findings(base_state))
         if score_after < score_before:
             errors.append(f'objective score decreased: {score_before} -> {score_after}')
     after = mechanical_findings(head_state)
     introduced = Counter()
     for finding in after:
         if finding_paths(finding) & touched:
-            introduced[fingerprint(finding, {})] += 1
+            introduced[key(finding, {}, 'head')] += 1
             if finding['tier'] in POLICY['ratchet']['touchedTiersMustBeClear']:
                 errors.append(f'T{finding["tier"]} remains in touched path: {finding["file"]} ({finding["detector"]})')
     for key, count in (introduced - before).items():
@@ -317,7 +388,7 @@ def snapshot(repo, sha, destination):
     batch = destination.parent / f'{destination.name}.blobs'
     with batch.open('wb') as output:
         requests = b''.join(oid + b'\n' for _, oid, _ in entries)
-        subprocess.run(['git', 'cat-file', '--batch'], input=requests, cwd=repo, stdout=output, stderr=subprocess.PIPE, check=True, timeout=1800)
+        git_process(['cat-file', '--batch'], input=requests, cwd=repo, stdout=output, stderr=subprocess.PIPE, check=True)
     with batch.open('rb') as source:
         for mode, oid, path in entries:
             header = source.readline().split()
@@ -349,7 +420,15 @@ def snapshot(repo, sha, destination):
         target.symlink_to(link)
 
 
-def scan(snapshot_root, area, output, areas):
+def verify_scanner():
+    require(POLICY.get('scannerPatch') == {'id': scanner_patch.PATCH_ID, 'sha256': scanner_patch.PATCHED_SHA256}, 'scanner patch differs from policy')
+    scanner_patch.verify()
+
+
+def scan(snapshot_root, area, output, areas, *, scanner_image=None, readers=None):
+    require(sys.platform == 'linux', 'trusted code-health scanning requires Linux')
+    verify_scanner()
+    require(scanner_image is not None and readers is not None, 'verified scanner image and readers are required')
     snapshot_root = snapshot_root.resolve()
     root = (snapshot_root / area['path']).resolve()
     require(root.is_relative_to(snapshot_root) and root.is_dir(), 'scan area is missing or escapes its snapshot')
@@ -361,18 +440,14 @@ def scan(snapshot_root, area, output, areas):
     for location in {snapshot_root, root}:
         (location / '.desloppify').mkdir(exist_ok=True)
         (location / '.desloppify/config.json').write_text(json.dumps(config))
-    env = {key: os.environ[key] for key in ['PATH', 'HOME', 'TMPDIR', 'SYSTEMROOT', 'LANG'] if key in os.environ}
-    private_home = snapshot_root.parent / 'scanner-home'
-    private_home.mkdir(exist_ok=True)
-    env['HOME'] = str(private_home)
-    env['PATH'] = str(Path(sys.executable).parent) + os.pathsep + env.get('PATH', '')
-    env.update({'DESLOPPIFY_ROOT': str(snapshot_root), 'NO_COLOR': '1', 'CI': 'true', 'npm_config_yes': 'false'})
     state = output / 'state.json'
-    output.mkdir(parents=True)
-    command = [str(Path(sys.executable).with_name('desloppify')), '--lang', area['language']]
-    log = run(command + ['scan', '--path', area['path'], '--profile', 'ci', '--no-badge', '--state', str(state)], cwd=snapshot_root, env=env)
+    output.mkdir(parents=True, mode=0o700)
+    command = ['--lang', area['language']]
+    log = scanner_container.run_scanner(image=scanner_image, source=snapshot_root, readers=readers, output=output,
+        arguments=command + ['scan', '--path', area['path'], '--profile', 'ci', '--no-badge', '--state', '/output/state.json'])
     (output / 'scan.log').write_bytes(log)
-    status = run(command + ['status', '--state', str(state), '--json'], cwd=snapshot_root, env=env)
+    status = scanner_container.run_scanner(image=scanner_image, source=snapshot_root, readers=readers, output=output,
+        arguments=command + ['status', '--state', '/output/state.json', '--json'])
     (output / 'status.json').write_bytes(status)
     return json.loads(status), read_json(state)
 
@@ -388,19 +463,23 @@ def main():
     parser.add_argument('--action-ref', required=True)
     parser.add_argument('--caller-ref', required=True)
     parser.add_argument('--caller-sha', required=True)
+    parser.add_argument('--scanner-image', required=True)
+    parser.add_argument('--reader-directory', required=True, type=Path)
     args = parser.parse_args()
     require(re.fullmatch('[0-9a-f]{40}', args.base) and re.fullmatch('[0-9a-f]{40}', args.head), 'base and head must be full commit SHAs')
     require(version('desloppify') == POLICY['desloppifyVersion'], 'installed scanner version differs from the shared pin')
-    args.output = args.output.resolve()
+    verify_scanner()
+    requested_output = args.output.absolute()
+    require(requested_output.resolve() == requested_output, 'result path must not contain symbolic links')
+    args.output = requested_output
     require(re.fullmatch(r'agentsia-uk/[A-Za-z0-9_.-]+', args.repository), 'repository must be an agentsia-uk slug')
     repo = args.repo.resolve()
     args.repo = repo
     for sha in [args.base, args.head]:
         run(['git', 'rev-parse', '--verify', f'{sha}^{{commit}}'], cwd=repo)
-    base_bytes = subprocess.run(['git', 'show', f'{args.base}:{CONFIG}'], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
-    require(base_bytes.returncode in {0, 128}, 'could not read base config')
-    base = validate_config(json.loads(base_bytes.stdout)) if base_bytes.returncode == 0 else None
-    head = validate_config(json.loads(run(['git', 'show', f'{args.head}:{CONFIG}'], cwd=repo)))
+    base_bytes = git_blob(repo, args.base, CONFIG, max_bytes=MAX_CONFIG_BYTES, optional=True)
+    base = validate_config(json.loads(base_bytes)) if base_bytes is not None else None
+    head = validate_config(json.loads(git_blob(repo, args.head, CONFIG, max_bytes=MAX_CONFIG_BYTES)))
     touched, renames = changed_paths(repo, args.base, args.head)
     event_path = os.environ.get('GITHUB_EVENT_PATH')
     event = read_json(Path(event_path)) if event_path else {}
@@ -410,22 +489,27 @@ def main():
     files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.head], cwd=repo).decode().rstrip('\0').split('\0')
     base_files = run(['git', 'ls-tree', '-r', '--name-only', '-z', args.base], cwd=repo).decode().rstrip('\0').split('\0')
     validate_language_coverage(files, head['areas'])
-    args.output.mkdir(parents=True, exist_ok=True)
+    args.output.mkdir(parents=True, mode=0o700, exist_ok=True)
+    output_metadata = args.output.stat()
+    require(output_metadata.st_uid == os.geteuid() and not output_metadata.st_mode & 0o077,
+            'result directory must be private and owned by the caller')
     results = []
     with tempfile.TemporaryDirectory(prefix='code-health-') as temporary:
         root = Path(temporary)
         for name, sha in [('base', args.base), ('head', args.head)]:
             snapshot(repo, sha, root / name)
+            (root / name).chmod(0o700)
         for area in head['areas']:
-            before = scan(root / 'base', area, args.output / area['id'] / 'base', head['areas']) if area_has_source(base_files, area, head['areas']) else (None, None)
-            after = scan(root / 'head', area, args.output / area['id'] / 'head', head['areas'])
-            result = compare(*before, *after, touched, renames, area['language'])
+            before = scan(root / 'base', area, root / 'scan-outputs' / area['id'] / 'base', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory) if area_has_source(base_files, area, head['areas']) else (None, None)
+            after = scan(root / 'head', area, root / 'scan-outputs' / area['id'] / 'head', head['areas'], scanner_image=args.scanner_image, readers=args.reader_directory)
+            result = compare(*before, *after, touched, renames, area['language'], source_roots=(root / 'base', root / 'head'))
             results.append({'area': area['id'], **result})
     report = {
         'schemaVersion': 1,
         'base': args.base,
         'head': args.head,
         'desloppifyVersion': POLICY['desloppifyVersion'],
+        'scannerPatch': {'id': scanner_patch.PATCH_ID, 'sha256': scanner_patch.PATCHED_SHA256},
         'provenance': provenance,
         'policyChanged': base is not None and base['policyRef'] != head['policyRef'],
         'upgradeEvidence': evidence,
@@ -433,7 +517,16 @@ def main():
         'areas': results,
         'unsupportedLanguages': head.get('unsupportedLanguages', []),
     }
-    (args.output / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
+    with tempfile.NamedTemporaryFile(mode='w', dir=args.output, prefix='.result-', delete=False) as temporary:
+        try:
+            json.dump(report, temporary, indent=2)
+            temporary.write('\n')
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            os.replace(temporary.name, args.output / 'result.json')
+        finally:
+            if os.path.exists(temporary.name):
+                os.unlink(temporary.name)
     print(json.dumps(report, indent=2))
     return int(any(r['errors'] for r in results))
 

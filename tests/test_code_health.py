@@ -2,6 +2,7 @@ import copy
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -51,6 +52,32 @@ class PolicyTests(unittest.TestCase):
         c['areas'][0]['exclusions'] = [{'pattern': 'dist', 'kind': 'build', 'rationale': 'compiler output'}]
         r.validate_config(c)
 
+    def test_scope_rejects_universal_globs_and_noncanonical_paths(self):
+        from desloppify.base.discovery.file_paths import matches_exclusion
+        for pattern in ['***', '*?*', '**/**', '*/*', '**/**/**']:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(matches_exclusion('src/lib/example.py', pattern))
+                if '/' not in pattern:
+                    self.assertTrue(matches_exclusion('example.py', pattern))
+                c = config()
+                c['areas'][0]['exclusions'] = [{'pattern': pattern, 'kind': 'build', 'rationale': 'synthetic'}]
+                with self.assertRaises(ValueError):
+                    r.validate_config(c)
+        for pattern in ['./**/*', '**///*', 'src/./build', 'dist/']:
+            c = config()
+            c['areas'][0]['exclusions'] = [{'pattern': pattern, 'kind': 'build', 'rationale': 'synthetic'}]
+            with self.subTest(pattern=pattern), self.assertRaises(ValueError):
+                r.validate_config(c)
+        for path in ['./src', 'src/', 'src//lib', 'src/./lib']:
+            c = config()
+            c['areas'][0]['path'] = path
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                r.validate_config(c)
+        for pattern in ['dist', '**/generated/**', '*.generated.ts']:
+            c = config()
+            c['areas'][0]['exclusions'] = [{'pattern': pattern, 'kind': 'generated', 'rationale': 'synthetic'}]
+            r.validate_config(c)
+
     def test_duplicate_unknown_fields_and_mutable_pin_rejected(self):
         cases = [dict(config(), policyRef='main'), dict(config(), ignore=['*']), dict(config(), areas=[])]
         c = config()
@@ -64,35 +91,35 @@ class PolicyTests(unittest.TestCase):
         shared = 'agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@'
         valid = 'on: [pull_request, merge_group]\njobs:\n  health:\n    uses: ' + shared + 'b' * 40 + '\n'
         workflow_path = '.github/workflows/ci.yml'
-        with patch.object(r, 'run', return_value=valid.encode()):
+        with patch.object(r, 'git_blob', return_value=valid.encode()):
             r.validate_workflow_pin(Path('.'), 'a' * 40, workflow_path, 'b' * 40)
         invalid = [valid.replace('b' * 40, 'main'), valid.replace('    uses:', '    if: false\n    uses:'), valid.replace('[pull_request, merge_group]', '[push]'), valid.replace('on: [pull_request, merge_group]', 'on:\n  pull_request:\n    paths: [src/**]\n  merge_group:')]
         for text in invalid:
-            with self.subTest(text=text), patch.object(r, 'run', return_value=text.encode()), self.assertRaises(ValueError):
+            with self.subTest(text=text), patch.object(r, 'git_blob', return_value=text.encode()), self.assertRaises(ValueError):
                 r.validate_workflow_pin(Path('.'), 'a' * 40, workflow_path, 'b' * 40)
 
     def test_yaml_loader_preserves_actions_scalars_without_constructing_objects(self):
         with tempfile.TemporaryDirectory() as temporary:
             marker = Path(temporary) / 'must-not-exist'
             text = ('metadata: !!python/object/apply:os.system ["touch ' + str(marker) + '"]\non: [pull_request, merge_group]\njobs:\n  health:\n    continue-on-error: false\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n').encode()
-            with patch.object(r, 'run', return_value=text):
+            with patch.object(r, 'git_blob', return_value=text):
                 r.validate_workflow_pin(Path('.'), 'c' * 40, '.github/workflows/health.yml', 'b' * 40)
             self.assertFalse(marker.exists())
 
     def test_policy_provenance_is_bound_to_actual_action_and_caller(self):
         args = SimpleNamespace(action_repository='agentsia-uk/ci-shared', action_ref='a' * 40, caller_sha='c' * 40, caller_ref='agentsia-uk/example/.github/workflows/actual.yml@refs/pull/1/merge', repository='agentsia-uk/example')
         text = ('on: [pull_request, merge_group]\njobs:\n  health:\n    uses: agentsia-uk/ci-shared/.github/workflows/shared-code-health.yml@' + 'b' * 40 + '\n').encode()
-        with patch.object(r, 'run', return_value=text) as command:
+        with patch.object(r, 'git_blob', return_value=text) as command:
             provenance = r.execution_provenance(Path('.'), args, config())
             self.assertEqual('a' * 40, provenance['actionRef'])
             self.assertEqual('c' * 40, provenance['callerWorkflowSha'])
             self.assertEqual('b' * 40, provenance['callerDeclaredWorkflowRef'])
-            self.assertEqual(['git', 'show', 'c' * 40 + ':.github/workflows/actual.yml'], command.call_args.args[0])
+            self.assertEqual((Path('.'), 'c' * 40, '.github/workflows/actual.yml'), command.call_args.args)
         args.action_ref = 'd' * 40
         with self.assertRaisesRegex(ValueError, 'executing action'):
             r.execution_provenance(Path('.'), args, config())
         args.action_ref = 'a' * 40
-        with patch.object(r, 'run', return_value=b'on: [pull_request, merge_group]\njobs: {other: {runs-on: linux}}'), self.assertRaisesRegex(ValueError, 'actual caller'):
+        with patch.object(r, 'git_blob', return_value=b'on: [pull_request, merge_group]\njobs: {other: {runs-on: linux}}'), self.assertRaisesRegex(ValueError, 'actual caller'):
             r.execution_provenance(Path('.'), args, config())
 
     def test_policy_pin_change_requires_a_dedicated_upgrade(self):
@@ -114,10 +141,13 @@ class PolicyTests(unittest.TestCase):
         args = SimpleNamespace(repository='agentsia-uk/example', repo=Path('.'), head='f' * 40, action_ref='a' * 40)
         def response(*_args, **_kwargs):
             return contextlib.closing(io.BytesIO(json.dumps([pr]).encode()))
-        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', side_effect=[b'e' * 40, json.dumps({'policyRef': 'a' * 40}).encode()]):
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(r, 'changed_paths', return_value=({r.CONFIG}, {})), patch.object(r, 'run', return_value=b'e' * 40), patch.object(r, 'git_blob', return_value=json.dumps({'policyRef': 'a' * 40}).encode()):
             self.assertEqual({'pullRequest': 1, 'headSha': 'd' * 40}, r.upgrade_evidence(event, args, {'src/app.py', r.CONFIG}))
-        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r.urllib.request, 'urlopen', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
             self.assertIsNone(r.upgrade_evidence(event, args, {r.CONFIG}))
+        with patch.dict(r.os.environ, {'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}), patch.object(r, 'open_upgrade_api', side_effect=response), patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=128)):
+            with self.assertRaisesRegex(ValueError, 'could not verify queued upgrade ancestry'):
+                r.upgrade_evidence(event, args, {r.CONFIG})
 
     def test_every_supported_source_language_requires_an_area(self):
         r.validate_language_coverage(['src/a.py', 'README.md'], config()['areas'])
@@ -190,6 +220,35 @@ class RatchetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             r.compare({'objective_score': 90}, state(), {'objective_score': 90}, {}, set(), {}, 'python')
 
+    def test_malformed_detector_confidence_cannot_look_comparable(self):
+        for value in (True, False, None, float('nan'), float('inf'), -0.1, 1.1, '1'):
+            broken = state()
+            broken['scan_coverage']['python']['detectors']['smells']['confidence'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                r.compare({'objective_score': 90}, state(), {'objective_score': 90}, broken, set(), {}, 'python')
+            with self.subTest(equal_invalid_value=value), self.assertRaises(ValueError):
+                r.compare({'objective_score': 90}, broken, {'objective_score': 90}, broken, set(), {}, 'python')
+        for value in ('unknown', None, True):
+            broken = state()
+            broken['scan_coverage']['python']['detectors']['smells']['status'] = value
+            with self.subTest(status=value), self.assertRaises(ValueError):
+                r.detector_coverage(broken, 'python')
+
+    def test_different_reduced_coverage_reasons_are_not_comparable(self):
+        before = state()
+        before['scan_coverage']['python']['detectors']['smells'] = {
+            'status': 'reduced', 'confidence': .75, 'tool': 'bandit', 'reason': 'timeout'}
+        after = copy.deepcopy(before)
+        for key, value in [('reason', 'parse_error'), ('tool', 'other-tool'), ('impact', 'other checks missing')]:
+            changed = copy.deepcopy(after)
+            changed['scan_coverage']['python']['detectors']['smells'][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'not comparable'):
+                r.compare({'objective_score': 90}, before, {'objective_score': 90}, changed, set(), {}, 'python')
+        self.assertEqual([], r.compare({'objective_score': 90}, before, {'objective_score': 90}, after, set(), {}, 'python')['errors'])
+        after['scan_coverage']['python']['status'] = 'reduced'
+        with self.assertRaisesRegex(ValueError, 'not comparable'):
+            r.compare({'objective_score': 90}, before, {'objective_score': 90}, after, set(), {}, 'python')
+
     def test_snapshot_uses_exact_blobs_despite_export_attributes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -243,6 +302,70 @@ class RatchetTests(unittest.TestCase):
             self.assertEqual({'old name.py', 'new name.py', 'removed.py'}, touched)
             self.assertEqual({'old name.py': 'new name.py'}, renames)
 
+    def test_git_runner_rejects_other_programs(self):
+        for command in ([], ['/bin/sh', '-c', 'true']):
+            with self.subTest(command=command), self.assertRaisesRegex(ValueError, 'only Git'):
+                r.run(command, cwd=Path('.'))
+
+    def test_missing_config_is_distinct_from_corrupt_git_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary).resolve()
+            git = lambda *args: subprocess.check_output(['/usr/bin/git', *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'example').write_text('example')
+            git('add', '.')
+            git('commit', '-qm', 'no config')
+            absent = git('rev-parse', 'HEAD')
+            self.assertIsNone(r.git_blob(repo, absent, r.CONFIG, max_bytes=r.MAX_CONFIG_BYTES, optional=True))
+            (repo / '.github').mkdir()
+            (repo / r.CONFIG).write_text('{}')
+            git('add', '.')
+            git('commit', '-qm', 'config')
+            present = git('rev-parse', 'HEAD')
+            blob = git('rev-parse', f'{present}:{r.CONFIG}')
+            (repo / '.git/objects' / blob[:2] / blob[2:]).unlink()
+            with self.assertRaises(subprocess.CalledProcessError):
+                r.git_blob(repo, present, r.CONFIG, max_bytes=r.MAX_CONFIG_BYTES, optional=True)
+
+    def test_git_boundary_ignores_path_environment_and_replacement_objects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            repo = root / 'repo'
+            repo.mkdir()
+            git = lambda *args: subprocess.check_output([r.GIT_EXECUTABLE, *args], cwd=repo).decode().strip()
+            git('init', '-q')
+            git('config', 'user.name', 'test')
+            git('config', 'user.email', 'test@example.invalid')
+            (repo / 'source.py').write_text('original = True\n')
+            git('add', '.')
+            git('commit', '-qm', 'original')
+            original = git('rev-parse', 'HEAD')
+            (repo / 'source.py').write_text('replacement = True\n')
+            git('add', '.')
+            git('commit', '-qm', 'replacement')
+            replacement = git('rev-parse', 'HEAD')
+            worktree = root / 'linked-worktree'
+            git('worktree', 'add', '--quiet', '--detach', str(worktree), original)
+            git('replace', original, replacement)
+            self.assertEqual('replacement = True', git('show', f'{original}:source.py'))
+            binary = root / 'bin'
+            binary.mkdir()
+            marker = root / 'shadow-ran'
+            shadow = binary / 'git'
+            shadow.write_text('#!/bin/sh\nprintf shadow > "' + str(marker) + '"\nexec /usr/bin/git "$@"\n')
+            shadow.chmod(0o755)
+            overrides = {'PATH': str(binary), 'GIT_DIR': str(root / 'wrong.git'), 'GIT_WORK_TREE': str(root / 'wrong-tree'), 'GIT_OBJECT_DIRECTORY': str(root / 'wrong-objects'), 'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(root / 'wrong-alternates'), 'GIT_INDEX_FILE': str(root / 'wrong-index'), 'GIT_CONFIG_GLOBAL': str(root / 'wrong-config'), 'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.bare', 'GIT_CONFIG_VALUE_0': 'true', 'GIT_NO_REPLACE_OBJECTS': '0'}
+            with patch.dict(r.os.environ, overrides):
+                self.assertEqual(b'original = True\n', r.git_blob(worktree, original, 'source.py', max_bytes=100))
+                r.snapshot(worktree, original, root / 'snapshot')
+                result = r.git_process(['merge-base', '--is-ancestor', original, replacement], cwd=worktree, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(b'original = True\n', (root / 'snapshot/source.py').read_bytes())
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_cli_scans_real_git_snapshots_and_ignores_committed_local_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -266,25 +389,29 @@ class RatchetTests(unittest.TestCase):
             git('commit', '-qm', 'after')
             head = git('rev-parse', 'HEAD')
             output = root / 'result'
-            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head]
+            argv = ['ratchet', '--repo', str(repo), '--base', base, '--head', head, '--output', str(output), '--repository', 'agentsia-uk/example', '--action-repository', 'agentsia-uk/ci-shared', '--action-ref', 'a' * 40, '--caller-ref', 'agentsia-uk/example/.github/workflows/health.yml@refs/pull/1/merge', '--caller-sha', head, '--scanner-image', os.environ['CODE_HEALTH_TEST_IMAGE'], '--reader-directory', os.environ['CODE_HEALTH_TEST_READERS']]
             with patch.object(r.sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(1, r.main())
             report = json.loads((output / 'result.json').read_text())
+            self.assertEqual({'result.json'}, {path.name for path in output.iterdir()})
             self.assertEqual(base, report['base'])
             self.assertEqual(head, report['head'])
             self.assertTrue(report['areas'][0]['errors'])
             self.assertNotIn('eval(', json.dumps(report))
             self.assertEqual(r.POLICY['desloppifyVersion'], report['desloppifyVersion'])
 
+    @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_new_area_has_no_fabricated_baseline_score(self):
         area = dict(config()['areas'][0], path='new-project')
         self.assertFalse(r.area_has_source(['README.md'], area, [area]))
         self.assertTrue(r.area_has_source(['new-project/service.py'], area, [area]))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            (root / 'new-project').mkdir()
-            (root / 'new-project/service.py').write_text('def handle(value):\n    return str(value)\n')
-            status, scanned = r.scan(root, area, root / 'result', [area])
+            source = root / 'source'
+            source.mkdir(mode=0o700)
+            (source / 'new-project').mkdir()
+            (source / 'new-project/service.py').write_text('def handle(value):\n    return str(value)\n')
+            status, scanned = r.scan(source, area, root / 'result', [area], scanner_image=os.environ['CODE_HEALTH_TEST_IMAGE'], readers=Path(os.environ['CODE_HEALTH_TEST_READERS']))
             result = r.compare(None, None, status, scanned, {'new-project/service.py'}, {}, 'python')
             self.assertIsNone(result['objectiveBefore'])
             self.assertEqual('new-area', result['baselineKind'])
@@ -292,17 +419,18 @@ class RatchetTests(unittest.TestCase):
             unsafe = state([finding('new-project/service.py', tier=2)])
             self.assertTrue(r.compare(None, None, {'objective_score': 95}, unsafe, {'new-project/service.py'}, {}, 'python')['errors'])
 
+    @unittest.skipUnless(os.environ.get('CODE_HEALTH_TEST_IMAGE') and os.environ.get('CODE_HEALTH_TEST_READERS'), 'requires isolated scanner')
     def test_actual_scanner_rejects_new_security_defect(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             before, after = root / 'base', root / 'head'
-            before.mkdir()
-            after.mkdir()
+            before.mkdir(mode=0o700)
+            after.mkdir(mode=0o700)
             (before / 'service.py').write_text('def handle(value):\n    return str(value)\n')
             (after / 'service.py').write_text('def handle(value):\n    return eval(value)\n')
             area = config()['areas'][0]
-            base_status, base_state = r.scan(before, area, root / 'base-result', [area])
-            head_status, head_state = r.scan(after, area, root / 'head-result', [area])
+            base_status, base_state = r.scan(before, area, root / 'base-result', [area], scanner_image=os.environ['CODE_HEALTH_TEST_IMAGE'], readers=Path(os.environ['CODE_HEALTH_TEST_READERS']))
+            head_status, head_state = r.scan(after, area, root / 'head-result', [area], scanner_image=os.environ['CODE_HEALTH_TEST_IMAGE'], readers=Path(os.environ['CODE_HEALTH_TEST_READERS']))
             result = r.compare(base_status, base_state, head_status, head_state, {'service.py'}, {}, 'python')
             self.assertTrue(result['errors'])
             self.assertTrue(any('security' in error for error in result['errors']))
@@ -311,28 +439,26 @@ class RatchetTests(unittest.TestCase):
 
     def test_scanner_uses_pinned_config_and_drops_credential_environment(self):
         calls = []
-        def fake_run(args, *, cwd, env=None):
-            calls.append((args, env))
-            if 'scan' in args:
-                output = Path(args[args.index('--state') + 1])
-                output.write_text(json.dumps(state()))
+        def fake_run(*, image, source, readers, output, arguments):
+            calls.append((image, source, readers, output, arguments))
+            if 'scan' in arguments:
+                (output / 'state.json').write_text(json.dumps(state()))
                 return b'log'
             return b'{"objective_score": 90}'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / 'repo'
             root.mkdir()
             (root / 'training').mkdir()
-            with patch.object(r, 'run', side_effect=fake_run), patch.dict(r.os.environ, {'GH_TOKEN': 'do-not-forward', 'OPENAI_API_KEY': 'do-not-forward', 'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}):
-                r.scan(root, config()['areas'][0], Path(temporary) / 'output', [*config()['areas'], {'path': 'training'}])
+            with patch.object(r.sys, 'platform', 'linux'), patch.object(r, 'verify_scanner'), \
+                    patch.object(r.scanner_container, 'run_scanner', side_effect=fake_run), \
+                    patch.dict(r.os.environ, {'GH_TOKEN': 'do-not-forward', 'OPENAI_API_KEY': 'do-not-forward', 'CODE_HEALTH_GITHUB_TOKEN': 'private-read-token'}):
+                r.scan(root, config()['areas'][0], Path(temporary) / 'output', [*config()['areas'], {'path': 'training'}], scanner_image='image', readers=Path(temporary) / 'readers')
             scanner_config = json.loads((root / '.desloppify/config.json').read_text())
             self.assertFalse(scanner_config['trust_plugins'])
             self.assertFalse(scanner_config['hermes_enabled'])
             self.assertEqual(['training'], scanner_config['exclude'])
-            self.assertIn('--profile', calls[0][0])
-            for _, env in calls:
-                self.assertNotIn('GH_TOKEN', env)
-                self.assertNotIn('OPENAI_API_KEY', env)
-                self.assertNotIn('CODE_HEALTH_GITHUB_TOKEN', env)
+            self.assertIn('--profile', calls[0][-1])
+            self.assertEqual({'PATH', 'HOME', 'DOCKER_CONFIG'}, set(r.scanner_container.ENVIRONMENT))
 
 
 if __name__ == '__main__':

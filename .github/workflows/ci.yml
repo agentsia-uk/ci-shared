@@ -33,14 +33,246 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
       - name: Install scanner and run policy regressions
         run: |
-          version=$(python -c 'import json; print(json.load(open("code_health/policy.json"))["desloppifyVersion"])')
-          python -m pip install --disable-pip-version-check "desloppify[full]==${version}"
-          python -m unittest discover -s tests -v
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-tool.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          unset PYTHONPATH PYTHONHOME
+          "$tool_dir/bin/python" -m unittest discover -s tests -v
+          CODE_HEALTH_READER_INTEGRATION=1 "$tool_dir/bin/python" -m unittest tests.test_readers_integration -v
+          CODE_HEALTH_GH_INTEGRATION=1 "$tool_dir/bin/python" -m unittest tests.test_prepare_release_gh.ReleaseGhTests.test_real_verified_linux_cli_runs -v
+          DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-scanner-test:local .
+          CODE_HEALTH_SCANNER_IMAGE=code-health-scanner-test:local "$tool_dir/bin/python" -m unittest tests.test_scanner_container_integration -v
+          test_task=$(mktemp -d "${RUNNER_TEMP:?}/code-health-task.XXXXXXXX")
+          test_readers="$test_task/readers"
+          mkdir "$test_readers" "$test_task/tmp"
+          chmod 700 "$test_readers" "$test_task/tmp"
+          "$tool_dir/bin/python" -I -c 'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); runpy.run_module("code_health.prepare_readers",run_name="__main__")' "$PWD" --destination "$test_readers"
+          test_image=$(docker image inspect --format '{{.Id}}' code-health-scanner-test:local)
+          CODE_HEALTH_TEST_IMAGE="$test_image" CODE_HEALTH_TEST_READERS="$test_readers" \
+          CODE_HEALTH_TASK_DIR="$test_task" CODE_HEALTH_TASK_ID="$(stat -c '%d:%i' "$test_task")" TMPDIR="$test_task/tmp" "$tool_dir/bin/python" -m unittest \
+            tests.test_code_health.RatchetTests.test_cli_scans_real_git_snapshots_and_ignores_committed_local_state \
+            tests.test_code_health.RatchetTests.test_new_area_has_no_fabricated_baseline_score \
+            tests.test_code_health.RatchetTests.test_actual_scanner_rejects_new_security_defect -v
+
+  qualification-container-boundary:
+    name: Qualification container boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 08d338db420c658a5b55244403ff8916d027dfc7
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: candidate-source
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Test the isolated candidate and its independent controller
+        run: |
+          test "$(git rev-parse HEAD)" = 08d338db420c658a5b55244403ff8916d027dfc7
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-qualifier.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          mkdir -p "$tool_dir/context/code_health"
+          cp code_health/requirements.lock code_health/scanner_patch.py code_health/readers_lock.py code_health/scanner_entrypoint.py "$tool_dir/context/code_health/"
+          DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-qualification-test:local "$tool_dir/context"
+          test_image=$(docker image inspect --format '{{.Id}}' code-health-qualification-test:local)
+          unset PYTHONPATH PYTHONHOME
+          QUALIFICATION_CANDIDATE_REPO="$GITHUB_WORKSPACE/candidate-source" QUALIFICATION_TEST_IMAGE="$test_image" "$tool_dir/bin/python" -m unittest \
+            tests.test_qualification_container_integration.ContainerBoundaryTests.test_effective_container_restrictions \
+            tests.test_qualification_container_integration.ContainerBoundaryTests.test_candidate_exit_cannot_claim_a_successful_test -v
+
+  qualification-collect:
+    name: Collect isolated qualification observations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 08d338db420c658a5b55244403ff8916d027dfc7
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: candidate-source
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Collect bounded observations without release credentials
+        run: |
+          test "$(git rev-parse HEAD)" = 08d338db420c658a5b55244403ff8916d027dfc7
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-qualifier.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          mkdir -p "$tool_dir/context/code_health"
+          cp code_health/requirements.lock code_health/scanner_patch.py code_health/readers_lock.py code_health/scanner_entrypoint.py "$tool_dir/context/code_health/"
+          DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-qualification-test:local "$tool_dir/context"
+          test_image=$(docker image inspect --format '{{.Id}}' code-health-qualification-test:local)
+          "$tool_dir/bin/python" -I -c 'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); runpy.run_module("code_health.qualification_pipeline",run_name="__main__")' "$GITHUB_WORKSPACE" collect \
+            --repo "$GITHUB_WORKSPACE/candidate-source" --commit "$GITHUB_SHA" --result "$RUNNER_TEMP/qualification-observations.json" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --image "$test_image"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: code-health-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification-observations.json
+          if-no-files-found: error
+          retention-days: 1
+
+  qualification-verdict:
+    name: Verify qualification independently
+    needs: qualification-collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 08d338db420c658a5b55244403ff8916d027dfc7
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: candidate-source
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: code-health-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification-input
+      - name: Rebuild the candidate and verify every observation
+        run: |
+          test "$(git rev-parse HEAD)" = 08d338db420c658a5b55244403ff8916d027dfc7
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-verdict.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          "$tool_dir/bin/python" -I -c 'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); runpy.run_module("code_health.qualification_pipeline",run_name="__main__")' "$GITHUB_WORKSPACE" validate \
+            --repo "$GITHUB_WORKSPACE/candidate-source" --commit "$GITHUB_SHA" --result "$RUNNER_TEMP/qualification-input/qualification-observations.json" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+  reader-arm64-integration:
+    name: Reader integration (Linux ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Verify actual reader bundle and load every supported reader
+        run: |
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-tool.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          unset PYTHONPATH PYTHONHOME
+          CODE_HEALTH_READER_INTEGRATION=1 "$tool_dir/bin/python" -m unittest tests.test_readers_integration -v
+
+  scanner-action-preparation:
+    name: Draft scanner action preparation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Prepare draft action
+        uses: ./code_health
+        continue-on-error: true
+        with:
+          repository-path: ${{ github.workspace }}
+          base-sha: ${{ github.sha }}
+          head-sha: ${{ github.sha }}
+          output-path: ${{ runner.temp }}/code-health-action-smoke
+      - name: Verify preparation completed
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${CODE_HEALTH_SCANNER_IMAGE:-}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${CODE_HEALTH_READERS:?}" == "${CODE_HEALTH_TASK_DIR:?}/readers" ]]
+          [[ "${CODE_HEALTH_PYTHON:?}" == "${CODE_HEALTH_TASK_DIR:?}/tool/bin/python" ]]
+          test ! -e "$CODE_HEALTH_TASK_DIR"
+          docker image inspect "$CODE_HEALTH_SCANNER_IMAGE" >/dev/null
+
+  scanner-rootless-integration:
+    name: Scanner integration (rootless Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Start a delegated user service session
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid=$(id -u)
+          sudo loginctl enable-linger "$(id -un)"
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          for _ in {1..100}; do [[ -S "$XDG_RUNTIME_DIR/bus" ]] && break; sleep 0.1; done
+          test -S "$XDG_RUNTIME_DIR/bus"
+          systemctl --user show-environment >/dev/null
+          printf 'XDG_RUNTIME_DIR=%s\nDBUS_SESSION_BUS_ADDRESS=%s\n' "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+      - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5
+        with:
+          version: v29.8.1
+          rootless: true
+          set-host: true
+      - name: Run the real scanner and recovery tests with rootless Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v socat >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y socat
+          fi
+          uid=$(id -u)
+          sudo install -d -m 700 -o "$uid" -g "$(id -g)" "/run/user/$uid"
+          [[ "${DOCKER_HOST:-}" == unix://* ]]
+          actual_socket=${DOCKER_HOST#unix://}
+          socket="/run/user/$uid/docker.sock"
+          if [[ "$actual_socket" != "$socket" ]]; then
+            test ! -e "$socket"
+            socat "UNIX-LISTEN:$socket,fork,mode=660" "UNIX-CONNECT:$actual_socket" &
+            proxy_pid=$!
+            trap 'kill "$proxy_pid" 2>/dev/null || true; wait "$proxy_pid" 2>/dev/null || true; rm -f "$socket"' EXIT
+            for _ in {1..50}; do [[ -S "$socket" ]] && break; sleep 0.1; done
+          fi
+          test -S "$socket"
+          export DOCKER_HOST="unix://$socket"
+          tool_dir=$(mktemp -d "${RUNNER_TEMP:?}/code-health-rootless.XXXXXXXX")
+          python -I -m venv "$tool_dir"
+          "$tool_dir/bin/python" -I -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r code_health/requirements.lock
+          "$tool_dir/bin/python" -I code_health/scanner_patch.py
+          DOCKER_BUILDKIT=1 docker build -f code_health/scanner.Dockerfile -t code-health-rootless-test:local .
+          unset PYTHONPATH PYTHONHOME
+          CODE_HEALTH_SCANNER_IMAGE=code-health-rootless-test:local "$tool_dir/bin/python" -m unittest tests.test_scanner_container_integration -v

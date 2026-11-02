@@ -1,0 +1,18 @@
+{
+  "manifestSha256": "39e53840bb31cd934b8829b7e0a968bb53cf3a4c0a849e5aede471e0b78e7f7f",
+  "package": "tree-sitter-language-pack",
+  "platforms": {
+    "linux-aarch64": {
+      "sha256": "84d83441052a0a9316aa6b120de6900642dcf68bdd961266433abb321ae7bc83",
+      "size": 18689258,
+      "url": "https://github.com/kreuzberg-dev/tree-sitter-language-pack/releases/download/v1.6.2/parsers-linux-aarch64.tar.zst"
+    },
+    "linux-x86_64": {
+      "sha256": "5b5a4d2d5319b7d2fae6c7a87e8bf8618c6c827842dba7641a93693980e6b5ea",
+      "size": 19134009,
+      "url": "https://github.com/kreuzberg-dev/tree-sitter-language-pack/releases/download/v1.6.2/parsers-linux-x86_64.tar.zst"
+    }
+  },
+  "schemaVersion": 1,
+  "version": "1.6.2"
+}
