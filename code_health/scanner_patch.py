@@ -224,41 +224,60 @@ def review_source_identity(path: Path, language: str) -> dict[str, str] | None:
     return {'commit_sha': commit, 'path': str(target), 'language': language}
 
 
+def _patch_typescript(source: str) -> str:
+    if source.count(OLD) != 1:
+        raise ValueError('scanner patch target is missing or ambiguous')
+    return source.replace(OLD, NEW, 1)
+
+
+def _patch_python(source: str) -> str:
+    source = source.replace('import os\n', 'import ast\nimport os\n', 1)
+    for name, following, replacement in [('resolve_import_spec', 'resolve_barrel_reexports', PY_RESOLVER),
+                                           ('parse_test_import_specs', 'map_test_to_source', PY_PARSER)]:
+        start = source.index('def ' + name + '(')
+        end = source.index('def ' + following + '(', start)
+        source = source[:start] + replacement + source[end:]
+    return source
+
+
+def _patch_python_graph(source: str) -> str:
+    old = '    if target and import_names:\n'
+    if source.count(old) != 1:
+        raise ValueError('scanner graph patch target is missing or ambiguous')
+    return source.replace(old, '    if import_names:\n', 1)
+
+
+def _patch_python_complexity(source: str) -> str:
+    start = source.index('def compute_nesting_depth(')
+    end = source.index('def compute_long_functions(', start)
+    return source[:start] + PY_NESTING + source[end:]
+
+
+def _patch_mapping(source: str) -> str:
+    old = '        # Fallback: module-name lookup with progressively shorter prefixes.\n'
+    new = '        if lang_name == "python" and spec.startswith("."):\n            continue\n' + old
+    if source.count(old) != 1:
+        raise ValueError('scanner mapping patch target is missing or ambiguous')
+    return source.replace(old, new, 1)
+
+
+PATCHERS = {
+    'typescript': _patch_typescript,
+    'python': _patch_python,
+    'python_graph': _patch_python_graph,
+    'python_complexity': _patch_python_complexity,
+    'mapping': _patch_mapping,
+    'review_packet': patch_review_packet_source,
+}
+
+
 def patched_component(component: str, original: bytes) -> bytes:
+    if component not in COMPONENTS:
+        raise ValueError('unknown scanner component')
     spec = COMPONENTS[component]
     if component_digest(original) != spec['original']:
         raise ValueError('scanner source does not match the approved pin')
-    source = original.decode('utf-8')
-    if component == 'typescript':
-        if source.count(OLD) != 1:
-            raise ValueError('scanner patch target is missing or ambiguous')
-        source = source.replace(OLD, NEW, 1)
-    elif component == 'python':
-        source = source.replace('import os\n', 'import ast\nimport os\n', 1)
-        for name, following, replacement in [('resolve_import_spec', 'resolve_barrel_reexports', PY_RESOLVER),
-                                               ('parse_test_import_specs', 'map_test_to_source', PY_PARSER)]:
-            start = source.index('def ' + name + '(')
-            end = source.index('def ' + following + '(', start)
-            source = source[:start] + replacement + source[end:]
-    elif component == 'python_graph':
-        old = '    if target and import_names:\n'
-        if source.count(old) != 1:
-            raise ValueError('scanner graph patch target is missing or ambiguous')
-        source = source.replace(old, '    if import_names:\n', 1)
-    elif component == 'python_complexity':
-        start = source.index('def compute_nesting_depth(')
-        end = source.index('def compute_long_functions(', start)
-        source = source[:start] + PY_NESTING + source[end:]
-    elif component == 'mapping':
-        old = '        # Fallback: module-name lookup with progressively shorter prefixes.\n'
-        new = '        if lang_name == "python" and spec.startswith("."):\n            continue\n' + old
-        if source.count(old) != 1:
-            raise ValueError('scanner mapping patch target is missing or ambiguous')
-        source = source.replace(old, new, 1)
-    elif component == 'review_packet':
-        source = patch_review_packet_source(source)
-    else:
-        raise ValueError('unknown scanner component')
+    source = PATCHERS[component](original.decode('utf-8'))
     data = source.encode('utf-8')
     if component_digest(data) != spec['patched']:
         raise ValueError('scanner patch does not match its approved digest')
