@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "desloppifyVersion": "1.0",
   "readerMetadataVersion": 1,
-  "scannerPatch": {"id": "coverage-python-graph-nesting-and-review-source-v5", "sha256": "5054bba11d0dd2b60d65f5753d4ff15568bac48031b28dc8ab94ba353258369d"},
+  "scannerPatch": {"id": "coverage-python-graph-nesting-dynamic-dicts-and-review-source-v6", "sha256": "489a4bcf486d2fcaefb1878df53ed2c64bc6469e256d58132950197bcd17f134"},
   "strictTarget": 90,
   "review": {"model": "claude-opus-5-5", "effort": "high", "maxAgeDays": 30, "calibrateOnChange": true},
   "ratchet": {"objectiveDecreaseAllowed": 0, "newTouchedFindingsAllowed": 0, "touchedTiersMustBeClear": [1, 2]},

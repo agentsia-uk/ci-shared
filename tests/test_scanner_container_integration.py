@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from code_health import mechanical, prepare_readers, scanner_container, scanner_recovery
-from code_health.cli import POLICY, scan
+from code_health.cli import POLICY, mechanical_findings, scan
+
 
 IMAGE = os.environ.get('CODE_HEALTH_SCANNER_IMAGE')
 
@@ -69,7 +70,20 @@ class ScannerContainerTests(unittest.TestCase):
             with patch.object(sys, 'argv', ['prepare-readers', '--destination', str(readers)]):
                 prepare_readers.main()
             evidence = 'SYNTHETIC-RAW-SOURCE-MUST-NOT-SHIP'
-            (source / 'sample.py').write_text('def answer(value):\n    return eval(value)  # ' + evidence + '\n')
+            (source / 'sample.py').write_text('''\
+def answer(value):
+    return eval(value)  # SYNTHETIC-RAW-SOURCE-MUST-NOT-SHIP
+
+def dynamic_map(names):
+    files = {}
+    for name in names:
+        files[name] = name
+    return files["policy.json"]
+
+def missing_literal_key():
+    files = {}
+    return files["policy.json"]
+''')
             config = source / '.desloppify'
             config.mkdir(mode=0o700)
             (config / 'config.json').write_text(json.dumps({'generate_scorecard': False, 'trust_plugins': False,
@@ -96,6 +110,12 @@ class ScannerContainerTests(unittest.TestCase):
             self.assertEqual(POLICY['scannerPatch'], projection['scannerPatch'])
             self.assertNotIn(evidence, json.dumps(projection))
             self.assertTrue(any(finding['detector'] == 'security' for finding in projection['findings']))
+            phantom_reads = [finding for finding in mechanical_findings(state)
+                             if finding['detector'] == 'dict_keys' and 'phantom_read' in finding['id']]
+            self.assertEqual(1, len(phantom_reads))
+            self.assertEqual('sample.py', phantom_reads[0]['file'])
+            self.assertIn('policy.json', phantom_reads[0]['id'])
+
 
 
 if __name__ == '__main__':

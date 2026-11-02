@@ -3,7 +3,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+import ast
 
 from code_health import scanner_patch
 
@@ -16,6 +18,28 @@ def original_typescript():
 
 
 class ScannerPatchTests(unittest.TestCase):
+    def test_dynamic_writes_make_phantom_read_uncertain(self):
+        from desloppify.languages.python.detectors.dict_keys import (
+            TrackedDict, _CONFIG_NAMES, _is_singular_plural, _levenshtein,
+        )
+        source = scanner_patch.scanner_source('python_dict_helpers').read_bytes()
+        if scanner_patch.component_digest(source) != scanner_patch.COMPONENTS['python_dict_helpers']['patched']:
+            source = scanner_patch.patched_component('python_dict_helpers', source)
+        module = ast.parse(source)
+        function = next(node for node in module.body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'analyze_scope_issues')
+        namespace = {'TrackedDict': TrackedDict, '_CONFIG_NAMES': _CONFIG_NAMES,
+                     '_is_singular_plural': _is_singular_plural, '_levenshtein': _levenshtein}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), '<patched dict-key analysis>', 'exec'), namespace)
+        tracked = TrackedDict('files', 1, True)
+        tracked.reads['policy.json'].append(2)
+        tracked.has_dynamic_write = True
+        visitor = SimpleNamespace(filepath='sample.py')
+        self.assertEqual([], namespace['analyze_scope_issues'](visitor, {'files': tracked}, 'build'))
+        tracked.has_dynamic_write = False
+        self.assertEqual(['phantom_read'], [issue['kind'] for issue in
+                         namespace['analyze_scope_issues'](visitor, {'files': tracked}, 'build')])
+
     def test_review_source_identity_binds_a_clean_commit_to_its_scan_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -8,8 +8,8 @@ import re
 import subprocess  # nosec B404
 import tempfile
 
-PATCH_ID = 'coverage-python-graph-nesting-and-review-source-v5'
-PATCHED_SHA256 = '5054bba11d0dd2b60d65f5753d4ff15568bac48031b28dc8ab94ba353258369d'
+PATCH_ID = 'coverage-python-graph-nesting-dynamic-dicts-and-review-source-v6'
+PATCHED_SHA256 = '489a4bcf486d2fcaefb1878df53ed2c64bc6469e256d58132950197bcd17f134'
 COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_coverage',
                 'original': 'ab59a286ef8165fb8c812d894c1e1db6a6facca547a4a32e96eb20a5cfb3cd1f',
                 'patched': 'c3cc9f3d130093b6e9a289c67893e25fbcef44a3091bdd7bf081069dbee0d28f'},
@@ -27,7 +27,16 @@ COMPONENTS = {'typescript': {'module': 'desloppify.languages.typescript.test_cov
              'patched': 'e89a7267a8e6e29072e8bc3b7655822a0efdcc8e9442921af2f87060c6b459fe'},
  'review_packet': {'module': 'desloppify.app.commands.review.packet.build',
                    'original': '74676d8bf41864c0eefe9c513097139ef6af8e8bc07686f58405aeac586e8a91',
-                   'patched': 'ebfcdeaf4931f0090a5c687c485a1f005653a29fd352832e5b17d9e25f39df4e'}}
+                   'patched': 'ebfcdeaf4931f0090a5c687c485a1f005653a29fd352832e5b17d9e25f39df4e'},
+ 'python_dict_shared': {'module': 'desloppify.languages.python.detectors.dict_keys.shared',
+                        'original': '093008b9eee5c636fc807c02a61b497fd1171dc7f8a40dff2282b73e17e7a42b',
+                        'patched': '194695793b52370825bd211a2a798dd27a5e3e4259f466efefeac96724a8e0b8'},
+ 'python_dict_visitor': {'module': 'desloppify.languages.python.detectors.dict_keys.visitor',
+                         'original': '4e8dc299a7d75e66813c333c5929a84a0ab8cb2d83610dc528e4ce51237f7f8f',
+                         'patched': 'b1ca8a0c0abee453fad47fa18ef7f139cec4889d1165fd7b6596d7ed5e0706f1'},
+ 'python_dict_helpers': {'module': 'desloppify.languages.python.detectors.dict_keys.visitor_helpers',
+                         'original': '363ec1ee3311af9718d4120a098b9905cfb0cfcc215e4f1584ef3ff529799910',
+                         'patched': 'f289d2a0aa893d30b998aa6b44e1bfefc908d654ccbf0edbfc53e6de64d3743a'}}
 OLD = '''    for prod in production_set:
         prod_base = os.path.basename(prod)
         for c in candidates:
@@ -261,6 +270,35 @@ def _patch_mapping(source: str) -> str:
     return source.replace(old, new, 1)
 
 
+def _patch_python_dict_shared(source: str) -> str:
+    old = '    has_dynamic_key: bool = False\n'
+    if source.count(old) != 1:
+        raise ValueError('scanner dynamic-dictionary patch target is missing or ambiguous')
+    return source.replace(old, old + '    has_dynamic_write: bool = False\n', 1)
+
+
+def _patch_python_dict_visitor(source: str) -> str:
+    old = '        if key:\n            td.writes[key].append(line)\n        else:\n            td.has_dynamic_key = True\n'
+    if source.count(old) != 1:
+        raise ValueError('scanner dynamic-dictionary patch target is missing or ambiguous')
+    return source.replace(old, old + '            td.has_dynamic_write = True\n', 1)
+
+
+def _patch_python_dict_helpers(source: str) -> str:
+    changes = (
+        ('                        else:\n                            tracked.has_dynamic_key = True\n                elif method == "update":\n', '                        else:\n                            tracked.has_dynamic_key = True\n                            tracked.has_dynamic_write = True\n                elif method == "update":\n'),
+        ('                            elif key_node is None:\n                                tracked.has_dynamic_key = True\n', '                            elif key_node is None:\n                                tracked.has_dynamic_key = True\n                                tracked.has_dynamic_write = True\n'),
+        ('                    for kw in node.keywords:\n', '                    elif node.args:\n                        tracked.has_dynamic_key = True\n                        tracked.has_dynamic_write = True\n                    for kw in node.keywords:\n'),
+        ('                        else:\n                            tracked.has_dynamic_key = True\n                elif method in _BULK_READ_METHODS:\n', '                        else:\n                            tracked.has_dynamic_key = True\n                            tracked.has_dynamic_write = True\n                elif method in _BULK_READ_METHODS:\n'),
+        ('        phantom_keys = read_keys - written_keys\n', '        phantom_keys = read_keys - written_keys if not tracked.has_dynamic_write else set()\n'),
+    )
+    if any(source.count(old) != 1 for old, _ in changes):
+        raise ValueError('scanner dynamic-dictionary patch target is missing or ambiguous')
+    for old, new in changes:
+        source = source.replace(old, new, 1)
+    return source
+
+
 PATCHERS = {
     'typescript': _patch_typescript,
     'python': _patch_python,
@@ -268,6 +306,9 @@ PATCHERS = {
     'python_complexity': _patch_python_complexity,
     'mapping': _patch_mapping,
     'review_packet': patch_review_packet_source,
+    'python_dict_shared': _patch_python_dict_shared,
+    'python_dict_visitor': _patch_python_dict_visitor,
+    'python_dict_helpers': _patch_python_dict_helpers,
 }
 
 
